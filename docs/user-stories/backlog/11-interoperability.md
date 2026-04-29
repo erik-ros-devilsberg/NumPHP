@@ -6,7 +6,9 @@
 
 This story is large enough to ship in three phases. Each phase is independently shippable and the later phases can move to their own sprint.
 
-## Phase A — PHP arrays & file I/O (essential)
+**Status:** Phase A shipped 2026-04-29 (sprint `php-arrays-and-file-io`). Phases B and C remain.
+
+## Phase A — PHP arrays & file I/O (essential) ✅ shipped 2026-04-29
 
 Depends on Story 3 (creation API).
 

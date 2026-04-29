@@ -7,6 +7,42 @@ and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.
 
 ## [Unreleased]
 
+## [0.0.9] — 2026-04-29
+
+### Added — Story 11 Phase A: PHP arrays & file I/O
+- `NDArray::save(string $path): void` — writes a versioned little-endian binary file (magic `"NUMPHP\0\1"`, dtype byte, ndim byte, 6 reserved bytes, int64 shape, raw buffer). Non-contiguous inputs are materialised C-contig before write.
+- `NDArray::load(string $path): NDArray` (static) — reads files written by `save`. **Loader checks the format-version byte first** and throws a specific error (`"NUMPHP binary format version N is not supported; this build understands version 1. Re-save with an older numphp or upgrade."`) if the byte is unknown.
+- `$a->toCsv(string $path): void` — writes 1-D as one cell per row, 2-D as comma-separated rows. ndim ≥ 3 → `\ShapeException`. Floats are written via `%.17g` for bit-exact round-trip.
+- `NDArray::fromCsv(string $path, string $dtype = 'float64', bool $header = false): NDArray` (static) — returns a 2-D array. UTF-8 BOM is auto-skipped. Single-column input produces shape `(n, 1)`.
+- 5 new phpt tests (`046-…` through `050-…`). 50/50 tests now passing.
+
+### Notes — locale-safe float formatting
+Both reader and writer are protected against the user's PHP `LC_NUMERIC` setting. The reader uses `zend_strtod` (locale-independent — always accepts `.` decimal). The writer brackets its inner loop with `setlocale(LC_NUMERIC, "C")` save/restore so `1.5` is always written as `1.5`, never `1,5`. Without these, a user with German locale would produce CSVs that even our own reader couldn't parse.
+
+### Notes — stream layer
+File I/O goes through `php_stream_open_wrapper` instead of plain `fopen`, so `open_basedir` and stream wrappers (`phar://`, `data://`, custom user wrappers) are honoured automatically. Eliminates the path-traversal / sandboxing footgun that would otherwise be a documented limitation.
+
+### Notes — binary format extensibility
+The 16-byte header reserves 6 bytes (offsets 10..15) for forward extensions. Bumping the format version byte is reserved for breaking changes only; loader/saver share `#define NUMPHP_BINARY_FORMAT_VERSION 1` from `io.h` so they can't drift.
+
+### Notes — Phase A scope only
+Story 11 has three phases. Phase A (this release) ships PHP arrays and file I/O. Phases B (FFI `BufferView`) and C (Arrow IPC) remain in the backlog as a follow-up sprint.
+
+### Refactor
+- New `io.c` / `io.h` translation unit. Real I/O logic lives there; `ndarray.c` PHP_METHOD wrappers are thin.
+- Bumped `PHP_NUMPHP_VERSION` to `0.0.9`.
+- `config.m4` `PHP_NEW_EXTENSION` now lists `io.c` in the source set.
+
+### Deferred
+- TSV / pipe-delimited / arbitrary-delimiter CSV (no `delimiter` argument yet).
+- Per-column dtype detection in CSV reader.
+- CSV header value retention (no `columns()` accessor).
+- NumPy `.npy` / `.npz` format compatibility — out of scope; we have our own `NUMPHP\0\1` format. Cross-language interop will live in Phase C (Arrow).
+- Stream wrappers other than file:// can still be used via `php_stream_open_wrapper`, but `phar://` and similar haven't been exhaustively tested.
+- gzip / compression on save/load.
+- Big-endian platforms — compile-time `#error` makes the deferral explicit.
+- Phase B (`BufferView` for FFI) and Phase C (Arrow IPC) — separate sprint.
+
 ## [0.0.8] — 2026-04-29
 
 ### Added

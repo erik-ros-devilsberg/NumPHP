@@ -1,6 +1,7 @@
 #include "ndarray.h"
 #include "nditer.h"
 #include "ops.h"
+#include "io.h"
 
 #include "Zend/zend_exceptions.h"
 #include "Zend/zend_interfaces.h"
@@ -2150,6 +2151,63 @@ static void do_sort_method(INTERNAL_FUNCTION_PARAMETERS, int do_argsort)
 PHP_METHOD(NDArray, sort)    { do_sort_method(INTERNAL_FUNCTION_PARAM_PASSTHRU, 0); }
 PHP_METHOD(NDArray, argsort) { do_sort_method(INTERNAL_FUNCTION_PARAM_PASSTHRU, 1); }
 
+/* ===== file I/O — thin wrappers over io.c ===== */
+
+PHP_METHOD(NDArray, save)
+{
+    char *path; size_t path_len;
+    ZEND_PARSE_PARAMETERS_START(1, 1)
+        Z_PARAM_PATH(path, path_len)
+    ZEND_PARSE_PARAMETERS_END();
+
+    numphp_ndarray *a = Z_NDARRAY_P(ZEND_THIS);
+    if (!numphp_io_save(a, path, path_len)) RETURN_THROWS();
+}
+
+PHP_METHOD(NDArray, load)
+{
+    char *path; size_t path_len;
+    ZEND_PARSE_PARAMETERS_START(1, 1)
+        Z_PARAM_PATH(path, path_len)
+    ZEND_PARSE_PARAMETERS_END();
+
+    numphp_ndarray *out = numphp_io_load(path, path_len);
+    if (!out) RETURN_THROWS();
+    numphp_zval_wrap_ndarray(return_value, out);
+}
+
+PHP_METHOD(NDArray, toCsv)
+{
+    char *path; size_t path_len;
+    ZEND_PARSE_PARAMETERS_START(1, 1)
+        Z_PARAM_PATH(path, path_len)
+    ZEND_PARSE_PARAMETERS_END();
+
+    numphp_ndarray *a = Z_NDARRAY_P(ZEND_THIS);
+    if (!numphp_io_csv_write(a, path, path_len)) RETURN_THROWS();
+}
+
+PHP_METHOD(NDArray, fromCsv)
+{
+    char *path; size_t path_len;
+    zend_string *dtype_name = NULL;
+    zend_bool header = 0;
+
+    ZEND_PARSE_PARAMETERS_START(1, 3)
+        Z_PARAM_PATH(path, path_len)
+        Z_PARAM_OPTIONAL
+        Z_PARAM_STR(dtype_name)
+        Z_PARAM_BOOL(header)
+    ZEND_PARSE_PARAMETERS_END();
+
+    numphp_dtype dt = NUMPHP_FLOAT64;
+    if (dtype_name && !parse_dtype_str(dtype_name, &dt)) RETURN_THROWS();
+
+    numphp_ndarray *out = numphp_io_csv_read(path, path_len, dt, (int)header);
+    if (!out) RETURN_THROWS();
+    numphp_zval_wrap_ndarray(return_value, out);
+}
+
 /* ===== arginfo ===== */
 
 ZEND_BEGIN_ARG_WITH_RETURN_OBJ_INFO_EX(arginfo_zeros, 0, 1, NDArray, 0)
@@ -2305,6 +2363,25 @@ ZEND_BEGIN_ARG_WITH_RETURN_OBJ_INFO_EX(arginfo_sort, 0, 0, NDArray, 0)
     ZEND_ARG_TYPE_INFO_WITH_DEFAULT_VALUE(0, axis, IS_LONG, 1, "-1")
 ZEND_END_ARG_INFO()
 
+/* file I/O */
+ZEND_BEGIN_ARG_WITH_RETURN_TYPE_INFO_EX(arginfo_save, 0, 1, IS_VOID, 0)
+    ZEND_ARG_TYPE_INFO(0, path, IS_STRING, 0)
+ZEND_END_ARG_INFO()
+
+ZEND_BEGIN_ARG_WITH_RETURN_OBJ_INFO_EX(arginfo_load, 0, 1, NDArray, 0)
+    ZEND_ARG_TYPE_INFO(0, path, IS_STRING, 0)
+ZEND_END_ARG_INFO()
+
+ZEND_BEGIN_ARG_WITH_RETURN_TYPE_INFO_EX(arginfo_toCsv, 0, 1, IS_VOID, 0)
+    ZEND_ARG_TYPE_INFO(0, path, IS_STRING, 0)
+ZEND_END_ARG_INFO()
+
+ZEND_BEGIN_ARG_WITH_RETURN_OBJ_INFO_EX(arginfo_fromCsv, 0, 1, NDArray, 0)
+    ZEND_ARG_TYPE_INFO(0, path, IS_STRING, 0)
+    ZEND_ARG_TYPE_INFO_WITH_DEFAULT_VALUE(0, dtype, IS_STRING, 0, "\"float64\"")
+    ZEND_ARG_TYPE_INFO_WITH_DEFAULT_VALUE(0, header, _IS_BOOL, 0, "false")
+ZEND_END_ARG_INFO()
+
 /* ===== method table + class registration ===== */
 
 static const zend_function_entry numphp_ndarray_methods[] = {
@@ -2375,6 +2452,12 @@ static const zend_function_entry numphp_ndarray_methods[] = {
     /* sort */
     PHP_ME(NDArray, sort,    arginfo_sort,  ZEND_ACC_PUBLIC)
     PHP_ME(NDArray, argsort, arginfo_sort,  ZEND_ACC_PUBLIC)
+
+    /* file I/O */
+    PHP_ME(NDArray, save,    arginfo_save,    ZEND_ACC_PUBLIC)
+    PHP_ME(NDArray, load,    arginfo_load,    ZEND_ACC_PUBLIC | ZEND_ACC_STATIC)
+    PHP_ME(NDArray, toCsv,   arginfo_toCsv,   ZEND_ACC_PUBLIC)
+    PHP_ME(NDArray, fromCsv, arginfo_fromCsv, ZEND_ACC_PUBLIC | ZEND_ACC_STATIC)
 
     PHP_FE_END
 };
