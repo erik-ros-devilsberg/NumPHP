@@ -30,6 +30,6 @@ if test "$PHP_NUMPHP" != "no"; then
   PHP_SUBST(NUMPHP_SHARED_LIBADD)
 
   PHP_NEW_EXTENSION(numphp,
-    numphp.c ndarray.c ops.c linalg.c nditer.c io.c,
+    numphp.c ndarray.c ops.c linalg.c nditer.c io.c bufferview.c,
     $ext_shared,, -DZEND_ENABLE_STATIC_TSRMLS_CACHE=1)
 fi

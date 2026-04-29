@@ -6,7 +6,7 @@
 
 This story is large enough to ship in three phases. Each phase is independently shippable and the later phases can move to their own sprint.
 
-**Status:** Phase A shipped 2026-04-29 (sprint `php-arrays-and-file-io`). Phases B and C remain.
+**Status:** Phases A and B shipped 2026-04-29. Phase C (Arrow IPC) remains.
 
 ## Phase A — PHP arrays & file I/O (essential) ✅ shipped 2026-04-29
 
@@ -18,7 +18,7 @@ Depends on Story 3 (creation API).
 - `$a->toCsv(string $path)` — writes 1D or 2D arrays; higher dims rejected.
 - `NDArray::load(string $path)` / `$a->save(string $path)` — simple binary format: magic header (`"NUMPHP\0\1"`), dtype byte, ndim byte, shape array, raw little-endian buffer.
 
-## Phase B — Raw binary buffer (FFI surface)
+## Phase B — Raw binary buffer (FFI surface) ✅ shipped 2026-04-29
 
 For trusted internal callers using PHP's `FFI` extension or C-side embedding.
 

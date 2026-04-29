@@ -6,6 +6,7 @@
 #include "ops.h"
 #include "linalg.h"
 #include "nditer.h"
+#include "bufferview.h"
 
 zend_class_entry *numphp_ndarray_exception_ce;
 zend_class_entry *numphp_shape_exception_ce;
@@ -37,6 +38,7 @@ PHP_MINIT_FUNCTION(numphp)
 
     numphp_register_ndarray_class();
     numphp_register_linalg_class();
+    numphp_register_bufferview_class();
 
     return SUCCESS;
 }

@@ -7,6 +7,41 @@ and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.
 
 ## [Unreleased]
 
+## [0.0.10] — 2026-04-29
+
+### Added — Story 11 Phase B: FFI BufferView
+- New `BufferView` class. Final, no public constructor — instances come only from `NDArray::bufferView()`. Public read-only properties: `int $ptr` (the buffer's address as `uintptr_t`), `string $dtype`, `array $shape`, `array $strides`, `bool $writeable`.
+- `$a->bufferView(bool $writeable = false): BufferView` — returns a view that holds a refcount on the underlying buffer.
+- 4 new phpt tests (`051-…` through `054-…`); the FFI round-trip test (`054-`) skips cleanly when the `FFI` extension isn't loaded.
+- Bumped `PHP_NUMPHP_VERSION` to `0.0.10`.
+
+### Notes — refcount-protected lifetime
+`BufferView` bumps the underlying `numphp_buffer`'s refcount on construction and decrements on destruction. **The buffer outlives the source `NDArray` if the user drops the array first.** This is the property the FFI consumer needs: hold a `BufferView` and the pointer stays valid. Story 2 designed `numphp_buffer` for exactly this — Phase B just wires the existing refcount machinery to a new holder type.
+
+### Notes — `$writeable` is advisory in v1
+We expose `$writeable` to the consumer as a contract bool, but do not enforce read-only on the source `NDArray`. Reasoning:
+1. The existing `NUMPHP_WRITEABLE` flag is already informational; no code path enforces it.
+2. Adding enforcement everywhere is scope creep.
+3. The FFI consumer is the trust boundary; documenting the contract has the same practical effect as enforcement.
+
+### Notes — C-contiguous required
+`bufferView()` throws `\NDArrayException` if the source isn't C-contiguous (e.g. a `transpose()` view). Workaround: `clone $arr` (deep-copies into a fresh C-contig owner) before calling `bufferView()`. This avoids handing FFI consumers a buffer they would walk linearly and get wrong values from.
+
+### Notes — `$ptr` interpretation
+`$ptr` is the buffer's address as a `uintptr_t` cast to PHP `int` (which is platform-native long — 64-bit on the supported 64-bit platforms). Consumers using PHP's `FFI` extension can build a `CData` pointer from it via the standard FFI patterns. Documenting one-liner recipes is a Story 13 (docs) task.
+
+### Refactor
+- New `bufferview.c` / `bufferview.h` translation unit. Real BufferView logic lives there; `NDArray::bufferView()` PHP_METHOD in `ndarray.c` is a thin wrapper around `numphp_bufferview_create`.
+- `config.m4` `PHP_NEW_EXTENSION` now lists `bufferview.c` in the source set.
+- `MINIT` registers `BufferView` after `Linalg`.
+
+### Deferred
+- Enforcement of `$writeable` (would require WRITEABLE-flag honoring throughout `ndarray.c`).
+- Strides for non-C-contig sources (current restriction simplifies consumers).
+- A helper that returns a ready-made `FFI\CData` instead of an int address.
+- `BufferView::__toString()` showing metadata in human-readable form.
+- Phase C (Arrow IPC) — separate sprint.
+
 ## [0.0.9] — 2026-04-29
 
 ### Added — Story 11 Phase A: PHP arrays & file I/O

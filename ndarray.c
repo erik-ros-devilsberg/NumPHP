@@ -2,6 +2,7 @@
 #include "nditer.h"
 #include "ops.h"
 #include "io.h"
+#include "bufferview.h"
 
 #include "Zend/zend_exceptions.h"
 #include "Zend/zend_interfaces.h"
@@ -2208,6 +2209,18 @@ PHP_METHOD(NDArray, fromCsv)
     numphp_zval_wrap_ndarray(return_value, out);
 }
 
+PHP_METHOD(NDArray, bufferView)
+{
+    zend_bool writeable = 0;
+    ZEND_PARSE_PARAMETERS_START(0, 1)
+        Z_PARAM_OPTIONAL
+        Z_PARAM_BOOL(writeable)
+    ZEND_PARSE_PARAMETERS_END();
+
+    numphp_ndarray *a = Z_NDARRAY_P(ZEND_THIS);
+    if (!numphp_bufferview_create(return_value, a, (int)writeable)) RETURN_THROWS();
+}
+
 /* ===== arginfo ===== */
 
 ZEND_BEGIN_ARG_WITH_RETURN_OBJ_INFO_EX(arginfo_zeros, 0, 1, NDArray, 0)
@@ -2382,6 +2395,10 @@ ZEND_BEGIN_ARG_WITH_RETURN_OBJ_INFO_EX(arginfo_fromCsv, 0, 1, NDArray, 0)
     ZEND_ARG_TYPE_INFO_WITH_DEFAULT_VALUE(0, header, _IS_BOOL, 0, "false")
 ZEND_END_ARG_INFO()
 
+ZEND_BEGIN_ARG_WITH_RETURN_OBJ_INFO_EX(arginfo_bufferview, 0, 0, BufferView, 0)
+    ZEND_ARG_TYPE_INFO_WITH_DEFAULT_VALUE(0, writeable, _IS_BOOL, 0, "false")
+ZEND_END_ARG_INFO()
+
 /* ===== method table + class registration ===== */
 
 static const zend_function_entry numphp_ndarray_methods[] = {
@@ -2458,6 +2475,9 @@ static const zend_function_entry numphp_ndarray_methods[] = {
     PHP_ME(NDArray, load,    arginfo_load,    ZEND_ACC_PUBLIC | ZEND_ACC_STATIC)
     PHP_ME(NDArray, toCsv,   arginfo_toCsv,   ZEND_ACC_PUBLIC)
     PHP_ME(NDArray, fromCsv, arginfo_fromCsv, ZEND_ACC_PUBLIC | ZEND_ACC_STATIC)
+
+    /* FFI bridge */
+    PHP_ME(NDArray, bufferView, arginfo_bufferview, ZEND_ACC_PUBLIC)
 
     PHP_FE_END
 };
