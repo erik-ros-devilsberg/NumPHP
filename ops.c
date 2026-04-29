@@ -1,0 +1,858 @@
+#include "ops.h"
+#include "ndarray.h"
+#include "nditer.h"
+
+#include "Zend/zend_exceptions.h"
+
+#include <math.h>
+#include <string.h>
+#include <stdint.h>
+#include <stdlib.h>
+#include <float.h>
+
+/* ============================================================================
+ * Output-dtype rules (matching the sprint plan in docs/sprints/)
+ * ----------------------------------------------------------------------------
+ *   sum:    int → int64; f32 → f32; f64 → f64
+ *   mean:   int → f64;   f32 → f32; f64 → f64
+ *   min/max:                 preserve input dtype
+ *   var/std: int → f64;  f32 → f32; f64 → f64  (compute in double, cast)
+ *   argmin/argmax:        int64 always
+ * ============================================================================ */
+
+static numphp_dtype reduce_out_dtype(numphp_reduce_op op, numphp_dtype in)
+{
+    switch (op) {
+        case NUMPHP_REDUCE_SUM:
+            if (in == NUMPHP_INT32 || in == NUMPHP_INT64) return NUMPHP_INT64;
+            return in;
+        case NUMPHP_REDUCE_MEAN:
+        case NUMPHP_REDUCE_VAR:
+        case NUMPHP_REDUCE_STD:
+            if (in == NUMPHP_INT32 || in == NUMPHP_INT64) return NUMPHP_FLOAT64;
+            return in;
+        case NUMPHP_REDUCE_MIN:
+        case NUMPHP_REDUCE_MAX:
+            return in;
+        case NUMPHP_REDUCE_ARGMIN:
+        case NUMPHP_REDUCE_ARGMAX:
+            return NUMPHP_INT64;
+    }
+    return in;
+}
+
+/* ----------------------------------------------------------------------------
+ * Pairwise sum — recursively halves to limit floating-point roundoff.
+ * Threshold matches NumPy's general approach (small leaf ~ 8 elements).
+ * Used for the f32 / f64 sum and as part of mean.
+ * -------------------------------------------------------------------------- */
+static double pairwise_sum_f64(const char *p, zend_long stride, zend_long n, numphp_dtype dt)
+{
+    if (n <= 8) {
+        double s = 0.0;
+        for (zend_long i = 0; i < n; i++) {
+            s += numphp_read_f64(p + i * stride, dt);
+        }
+        return s;
+    }
+    zend_long m = n / 2;
+    return pairwise_sum_f64(p, stride, m, dt)
+         + pairwise_sum_f64(p + m * stride, stride, n - m, dt);
+}
+
+static double pairwise_sum_f64_skipnan(const char *p, zend_long stride, zend_long n,
+                                       numphp_dtype dt, zend_long *count_out)
+{
+    if (n <= 8) {
+        double s = 0.0;
+        zend_long c = 0;
+        for (zend_long i = 0; i < n; i++) {
+            double v = numphp_read_f64(p + i * stride, dt);
+            if (isnan(v)) continue;
+            s += v;
+            c++;
+        }
+        *count_out = c;
+        return s;
+    }
+    zend_long m = n / 2;
+    zend_long c1 = 0, c2 = 0;
+    double s1 = pairwise_sum_f64_skipnan(p, stride, m, dt, &c1);
+    double s2 = pairwise_sum_f64_skipnan(p + m * stride, stride, n - m, dt, &c2);
+    *count_out = c1 + c2;
+    return s1 + s2;
+}
+
+/* ----------------------------------------------------------------------------
+ * Welford's online algorithm — single pass, numerically stable variance.
+ *
+ *   M2 = 0, mean = 0, n = 0
+ *   for x:
+ *     n   += 1
+ *     d   = x - mean
+ *     mean += d / n
+ *     d2  = x - mean
+ *     M2  += d * d2
+ *   var = M2 / (n - ddof)
+ * -------------------------------------------------------------------------- */
+static int welford_axis(const char *p, zend_long stride, zend_long n,
+                        numphp_dtype dt, int skip_nan,
+                        double *mean_out, double *m2_out, zend_long *count_out)
+{
+    double mean = 0.0, m2 = 0.0;
+    zend_long count = 0;
+    for (zend_long i = 0; i < n; i++) {
+        double x = numphp_read_f64(p + i * stride, dt);
+        if (skip_nan && isnan(x)) continue;
+        count++;
+        double d = x - mean;
+        mean += d / (double)count;
+        double d2 = x - mean;
+        m2 += d * d2;
+    }
+    *mean_out = mean;
+    *m2_out = m2;
+    *count_out = count;
+    return 1;
+}
+
+/* ----------------------------------------------------------------------------
+ * Reduce a single 1-D strided "line" of values into one scalar. Used both for
+ * global reductions (over the contiguous flattened array) and for axis
+ * reductions (one call per outer index).
+ *
+ * Writes the result into `out_ptr` using `out_dt`. For ARGMIN/ARGMAX, writes
+ * an int64 index into the line.
+ *
+ * Returns 1 on success, 0 if a domain error occurred (and threw an exception).
+ * -------------------------------------------------------------------------- */
+static int reduce_line(const char *p, zend_long stride, zend_long n,
+                       numphp_dtype dt_in, numphp_dtype dt_out,
+                       numphp_reduce_op op, int ddof, int skip_nan,
+                       char *out_ptr)
+{
+    switch (op) {
+
+    /* ---- SUM ----------------------------------------------------------- */
+    case NUMPHP_REDUCE_SUM: {
+        if (dt_in == NUMPHP_INT32 || dt_in == NUMPHP_INT64) {
+            int64_t s = 0;
+            for (zend_long i = 0; i < n; i++) {
+                s += numphp_read_i64(p + i * stride, dt_in);
+            }
+            numphp_write_scalar_at(out_ptr, dt_out, (double)s, (zend_long)s);
+        } else if (skip_nan) {
+            zend_long c;
+            double s = pairwise_sum_f64_skipnan(p, stride, n, dt_in, &c);
+            numphp_write_scalar_at(out_ptr, dt_out, s, (zend_long)s);
+        } else {
+            double s = pairwise_sum_f64(p, stride, n, dt_in);
+            numphp_write_scalar_at(out_ptr, dt_out, s, (zend_long)s);
+        }
+        return 1;
+    }
+
+    /* ---- MEAN ---------------------------------------------------------- */
+    case NUMPHP_REDUCE_MEAN: {
+        if (n == 0) {
+            numphp_write_scalar_at(out_ptr, dt_out, NAN, 0);
+            return 1;
+        }
+        double s; zend_long c = n;
+        if (skip_nan) {
+            s = pairwise_sum_f64_skipnan(p, stride, n, dt_in, &c);
+        } else {
+            s = pairwise_sum_f64(p, stride, n, dt_in);
+        }
+        double m = (c > 0) ? (s / (double)c) : NAN;
+        numphp_write_scalar_at(out_ptr, dt_out, m, (zend_long)m);
+        return 1;
+    }
+
+    /* ---- MIN / MAX ----------------------------------------------------- */
+    case NUMPHP_REDUCE_MIN:
+    case NUMPHP_REDUCE_MAX: {
+        int is_int = (dt_in == NUMPHP_INT32 || dt_in == NUMPHP_INT64);
+        if (n == 0) {
+            /* Caller is supposed to bounds-check; defensive NaN/0 */
+            if (is_int) numphp_write_scalar_at(out_ptr, dt_out, 0.0, 0);
+            else        numphp_write_scalar_at(out_ptr, dt_out, NAN, 0);
+            return 1;
+        }
+        if (is_int) {
+            int64_t best = numphp_read_i64(p, dt_in);
+            for (zend_long i = 1; i < n; i++) {
+                int64_t v = numphp_read_i64(p + i * stride, dt_in);
+                if (op == NUMPHP_REDUCE_MIN ? (v < best) : (v > best)) best = v;
+            }
+            numphp_write_scalar_at(out_ptr, dt_out, (double)best, (zend_long)best);
+        } else {
+            /* Float min/max:
+             *   default: NaN propagates — if any NaN seen, result is NaN.
+             *   skip_nan: ignore NaNs; if all NaN, result is NaN. */
+            double best = numphp_read_f64(p, dt_in);
+            int saw_nonnan = !isnan(best);
+            int saw_nan = isnan(best);
+            if (skip_nan && !saw_nonnan) { saw_nan = 1; }  /* track but don't propagate */
+            for (zend_long i = 1; i < n; i++) {
+                double v = numphp_read_f64(p + i * stride, dt_in);
+                if (isnan(v)) {
+                    saw_nan = 1;
+                    if (!skip_nan) { best = v; break; }
+                    continue;
+                }
+                if (!saw_nonnan) { best = v; saw_nonnan = 1; continue; }
+                if (op == NUMPHP_REDUCE_MIN ? (v < best) : (v > best)) best = v;
+            }
+            if (!skip_nan && saw_nan) best = NAN;
+            else if (skip_nan && !saw_nonnan) best = NAN;
+            numphp_write_scalar_at(out_ptr, dt_out, best, (zend_long)best);
+        }
+        return 1;
+    }
+
+    /* ---- VAR / STD (Welford) ------------------------------------------ */
+    case NUMPHP_REDUCE_VAR:
+    case NUMPHP_REDUCE_STD: {
+        if (!skip_nan) {
+            /* Default: any NaN in input → NaN out. Walk once to detect. */
+            for (zend_long i = 0; i < n; i++) {
+                double v = numphp_read_f64(p + i * stride, dt_in);
+                if (isnan(v)) {
+                    numphp_write_scalar_at(out_ptr, dt_out, NAN, 0);
+                    return 1;
+                }
+            }
+        }
+        double mean, m2; zend_long count;
+        welford_axis(p, stride, n, dt_in, skip_nan, &mean, &m2, &count);
+        double denom = (double)(count - ddof);
+        double var = (count > 0 && denom > 0.0) ? (m2 / denom) : NAN;
+        double res = (op == NUMPHP_REDUCE_STD) ? sqrt(var) : var;
+        numphp_write_scalar_at(out_ptr, dt_out, res, (zend_long)res);
+        return 1;
+    }
+
+    /* ---- ARGMIN / ARGMAX ---------------------------------------------- */
+    case NUMPHP_REDUCE_ARGMIN:
+    case NUMPHP_REDUCE_ARGMAX: {
+        if (n == 0) {
+            zend_throw_exception_ex(numphp_ndarray_exception_ce, 0,
+                "%s: empty array", op == NUMPHP_REDUCE_ARGMIN ? "argmin" : "argmax");
+            return 0;
+        }
+        int is_int = (dt_in == NUMPHP_INT32 || dt_in == NUMPHP_INT64);
+        if (is_int) {
+            int64_t best = numphp_read_i64(p, dt_in);
+            zend_long best_i = 0;
+            for (zend_long i = 1; i < n; i++) {
+                int64_t v = numphp_read_i64(p + i * stride, dt_in);
+                if (op == NUMPHP_REDUCE_ARGMIN ? (v < best) : (v > best)) {
+                    best = v; best_i = i;
+                }
+            }
+            numphp_write_scalar_at(out_ptr, dt_out, (double)best_i, best_i);
+        } else {
+            /* Default behavior on argmin/argmax:
+             *   - Without skip_nan: NaN compares as "greater than everything" for
+             *     argmin (so it never wins); for argmax it propagates by being the
+             *     first NaN's index. Match NumPy: if any NaN, return its first index.
+             *   - With skip_nan: skip NaNs entirely; if all NaN, throw. */
+            zend_long first_nan = -1;
+            for (zend_long i = 0; i < n; i++) {
+                double v = numphp_read_f64(p + i * stride, dt_in);
+                if (isnan(v)) { first_nan = i; break; }
+            }
+            if (!skip_nan && first_nan >= 0) {
+                numphp_write_scalar_at(out_ptr, dt_out, (double)first_nan, first_nan);
+                return 1;
+            }
+            zend_long start = -1;
+            double best = 0.0;
+            for (zend_long i = 0; i < n; i++) {
+                double v = numphp_read_f64(p + i * stride, dt_in);
+                if (isnan(v)) continue;
+                start = i; best = v; break;
+            }
+            if (start < 0) {
+                /* All NaN with skip_nan */
+                zend_throw_exception_ex(numphp_ndarray_exception_ce, 0,
+                    "%s: all-NaN slice", op == NUMPHP_REDUCE_ARGMIN ? "nanargmin" : "nanargmax");
+                return 0;
+            }
+            zend_long best_i = start;
+            for (zend_long i = start + 1; i < n; i++) {
+                double v = numphp_read_f64(p + i * stride, dt_in);
+                if (isnan(v)) continue;
+                if (op == NUMPHP_REDUCE_ARGMIN ? (v < best) : (v > best)) {
+                    best = v; best_i = i;
+                }
+            }
+            numphp_write_scalar_at(out_ptr, dt_out, (double)best_i, best_i);
+        }
+        return 1;
+    }
+    } /* switch */
+    return 0;
+}
+
+/* ----------------------------------------------------------------------------
+ * Public reduction API.
+ *
+ * Strategy:
+ *   - Materialise `src` to a fresh contiguous owner if it isn't already.
+ *     This lets the global-reduction path treat the data as a flat 1-D line,
+ *     and the axis-reduction path uses well-defined strides.
+ *   - Build the output shape (drop axis, or keep size 1, or 0-D).
+ *   - For axis reductions, walk the outer indices; for each, compute the line
+ *     reduction and store at the matching output position.
+ * -------------------------------------------------------------------------- */
+numphp_ndarray *numphp_reduce(numphp_ndarray *src, numphp_reduce_op op,
+                              int has_axis, int axis, int keepdims, int ddof, int skip_nan)
+{
+    numphp_dtype out_dt = reduce_out_dtype(op, src->dtype);
+
+    /* Normalise / bounds-check axis at the C layer too, so direct callers are safe. */
+    if (has_axis) {
+        int ax = axis;
+        if (ax < 0) ax += src->ndim;
+        if (src->ndim == 0 || ax < 0 || ax >= src->ndim) {
+            zend_throw_exception_ex(numphp_shape_exception_ce, 0,
+                "axis %d out of range for ndim %d", axis, src->ndim);
+            return NULL;
+        }
+        axis = ax;
+    }
+
+    /* Empty global reduction (size 0) */
+    if (!has_axis && src->size == 0) {
+        if (op == NUMPHP_REDUCE_ARGMIN || op == NUMPHP_REDUCE_ARGMAX) {
+            zend_throw_exception_ex(numphp_ndarray_exception_ce, 0,
+                "%s: empty array",
+                op == NUMPHP_REDUCE_ARGMIN ? "argmin" : "argmax");
+            return NULL;
+        }
+        /* Build 0-D or all-1 keepdims output */
+        zend_long shape[NUMPHP_MAX_NDIM] = {0};
+        int ndim_out;
+        if (keepdims) {
+            ndim_out = src->ndim;
+            for (int i = 0; i < ndim_out; i++) shape[i] = 1;
+        } else {
+            ndim_out = 0;
+        }
+        numphp_ndarray *out = numphp_ndarray_alloc_owner(out_dt, ndim_out, shape);
+        char *o = (char *)out->buffer->data;
+        if (op == NUMPHP_REDUCE_SUM)       numphp_write_scalar_at(o, out_dt, 0.0, 0);
+        else if (op == NUMPHP_REDUCE_MEAN) numphp_write_scalar_at(o, out_dt, NAN, 0);
+        else                               numphp_write_scalar_at(o, out_dt, NAN, 0);
+        return out;
+    }
+
+    /* Use a contiguous copy for the inner walk. */
+    numphp_ndarray *contig = (src->flags & NUMPHP_C_CONTIGUOUS)
+        ? src : numphp_materialize_contiguous(src);
+    int owns_contig = (contig != src);
+    char *src_base = (char *)contig->buffer->data + contig->offset;
+
+    /* ===== global reduction ===== */
+    if (!has_axis) {
+        zend_long shape[NUMPHP_MAX_NDIM] = {0};
+        int ndim_out;
+        if (keepdims) {
+            ndim_out = src->ndim;
+            for (int i = 0; i < ndim_out; i++) shape[i] = 1;
+        } else {
+            ndim_out = 0;
+        }
+        numphp_ndarray *out = numphp_ndarray_alloc_owner(out_dt, ndim_out, shape);
+        char *o = (char *)out->buffer->data;
+
+        zend_long n = contig->size;
+        zend_long stride = contig->itemsize;
+        if (!reduce_line(src_base, stride, n, src->dtype, out_dt, op, ddof, skip_nan, o)) {
+            numphp_ndarray_free(out);
+            if (owns_contig) numphp_ndarray_free(contig);
+            return NULL;
+        }
+        if (owns_contig) numphp_ndarray_free(contig);
+        return out;
+    }
+
+    /* ===== axis reduction ===== */
+    int red = axis;
+    int in_ndim = src->ndim;
+    zend_long axis_n = src->shape[red];
+    zend_long axis_stride = contig->strides[red];
+
+    /* Output shape: drop or keep size-1 along `red`. */
+    zend_long out_shape[NUMPHP_MAX_NDIM];
+    int out_ndim;
+    if (keepdims) {
+        out_ndim = in_ndim;
+        for (int i = 0; i < in_ndim; i++) out_shape[i] = (i == red) ? 1 : src->shape[i];
+    } else {
+        out_ndim = in_ndim - 1;
+        int j = 0;
+        for (int i = 0; i < in_ndim; i++) {
+            if (i == red) continue;
+            out_shape[j++] = src->shape[i];
+        }
+    }
+    numphp_ndarray *out = numphp_ndarray_alloc_owner(out_dt, out_ndim, out_shape);
+    char *out_base = (char *)out->buffer->data;
+    zend_long out_itemsize = out->itemsize;
+
+    /* For each combination of "outer" indices (every axis except `red`):
+     *   - compute the source pointer
+     *   - compute the destination pointer
+     *   - reduce_line() over the red axis */
+    zend_long idx[NUMPHP_MAX_NDIM] = {0};
+    /* The number of outer iterations = src->size / axis_n, except when axis_n == 0 */
+    zend_long outer_total = (axis_n > 0) ? (src->size / axis_n) : 0;
+
+    if (axis_n == 0) {
+        /* Reducing along a zero-length axis. argmin/argmax → throw. Others fill identity / NaN. */
+        if (op == NUMPHP_REDUCE_ARGMIN || op == NUMPHP_REDUCE_ARGMAX) {
+            zend_throw_exception_ex(numphp_ndarray_exception_ce, 0,
+                "%s: zero-length reduction axis",
+                op == NUMPHP_REDUCE_ARGMIN ? "argmin" : "argmax");
+            numphp_ndarray_free(out);
+            if (owns_contig) numphp_ndarray_free(contig);
+            return NULL;
+        }
+        zend_long out_size = out->size;
+        for (zend_long n = 0; n < out_size; n++) {
+            char *o = out_base + n * out_itemsize;
+            if (op == NUMPHP_REDUCE_SUM) numphp_write_scalar_at(o, out_dt, 0.0, 0);
+            else                          numphp_write_scalar_at(o, out_dt, NAN, 0);
+        }
+        if (owns_contig) numphp_ndarray_free(contig);
+        return out;
+    }
+
+    for (zend_long n = 0; n < outer_total; n++) {
+        /* Compute src offset by combining all axes except red. */
+        zend_long src_off = 0;
+        for (int i = 0; i < in_ndim; i++) {
+            if (i == red) continue;
+            src_off += idx[i] * contig->strides[i];
+        }
+        char *o = out_base + n * out_itemsize;
+        if (!reduce_line(src_base + src_off, axis_stride, axis_n,
+                         src->dtype, out_dt, op, ddof, skip_nan, o)) {
+            numphp_ndarray_free(out);
+            if (owns_contig) numphp_ndarray_free(contig);
+            return NULL;
+        }
+        /* Increment all outer axes (skipping red), inner-most first. */
+        for (int i = in_ndim - 1; i >= 0; i--) {
+            if (i == red) continue;
+            if (++idx[i] < src->shape[i]) break;
+            idx[i] = 0;
+        }
+    }
+
+    if (owns_contig) numphp_ndarray_free(contig);
+    return out;
+}
+
+/* ============================================================================
+ * Element-wise math
+ * ============================================================================ */
+
+static numphp_dtype unary_out_dtype(numphp_math_op op, numphp_dtype in)
+{
+    switch (op) {
+        case NUMPHP_MATH_SQRT:
+            if (in == NUMPHP_INT32 || in == NUMPHP_INT64) return NUMPHP_FLOAT64;
+            return in;
+        case NUMPHP_MATH_EXP:
+        case NUMPHP_MATH_LOG:
+        case NUMPHP_MATH_LOG2:
+        case NUMPHP_MATH_LOG10:
+            return NUMPHP_FLOAT64;
+        case NUMPHP_MATH_ABS:
+        case NUMPHP_MATH_FLOOR:
+        case NUMPHP_MATH_CEIL:
+            return in;
+    }
+    return in;
+}
+
+static double apply_double(numphp_math_op op, double x)
+{
+    switch (op) {
+        case NUMPHP_MATH_SQRT:  return sqrt(x);
+        case NUMPHP_MATH_EXP:   return exp(x);
+        case NUMPHP_MATH_LOG:   return log(x);
+        case NUMPHP_MATH_LOG2:  return log2(x);
+        case NUMPHP_MATH_LOG10: return log10(x);
+        case NUMPHP_MATH_ABS:   return fabs(x);
+        case NUMPHP_MATH_FLOOR: return floor(x);
+        case NUMPHP_MATH_CEIL:  return ceil(x);
+    }
+    return x;
+}
+
+numphp_ndarray *numphp_apply_unary(numphp_ndarray *src, numphp_math_op op)
+{
+    numphp_dtype out_dt = unary_out_dtype(op, src->dtype);
+    numphp_ndarray *out = numphp_ndarray_alloc_owner(out_dt, src->ndim, src->shape);
+    if (out->size == 0) return out;
+
+    char *src_base = (char *)src->buffer->data + src->offset;
+    char *dst = (char *)out->buffer->data;
+    zend_long out_size = out->itemsize;
+
+    /* Fast path: f32 sqrt stays in f32 (use sqrtf); abs/floor/ceil on int are no-ops. */
+    int int_in = (src->dtype == NUMPHP_INT32 || src->dtype == NUMPHP_INT64);
+
+    if (int_in && (op == NUMPHP_MATH_FLOOR || op == NUMPHP_MATH_CEIL)) {
+        /* No-op: copy through preserving dtype. */
+        zend_long idx[NUMPHP_MAX_NDIM] = {0};
+        for (zend_long n = 0; n < src->size; n++) {
+            zend_long s_off = 0;
+            for (int j = 0; j < src->ndim; j++) s_off += idx[j] * src->strides[j];
+            double dv = 0.0; zend_long lv = 0;
+            numphp_read_scalar_at(src_base + s_off, src->dtype, &dv, &lv);
+            numphp_write_scalar_at(dst + n * out_size, out_dt, dv, lv);
+            for (int j = src->ndim - 1; j >= 0; j--) {
+                if (++idx[j] < src->shape[j]) break;
+                idx[j] = 0;
+            }
+        }
+        return out;
+    }
+
+    if (int_in && op == NUMPHP_MATH_ABS) {
+        zend_long idx[NUMPHP_MAX_NDIM] = {0};
+        for (zend_long n = 0; n < src->size; n++) {
+            zend_long s_off = 0;
+            for (int j = 0; j < src->ndim; j++) s_off += idx[j] * src->strides[j];
+            int64_t v = numphp_read_i64(src_base + s_off, src->dtype);
+            int64_t r = (v < 0) ? -v : v;
+            numphp_write_scalar_at(dst + n * out_size, out_dt, (double)r, (zend_long)r);
+            for (int j = src->ndim - 1; j >= 0; j--) {
+                if (++idx[j] < src->shape[j]) break;
+                idx[j] = 0;
+            }
+        }
+        return out;
+    }
+
+    /* General path: walk src in declared order, compute in double, store typed. */
+    zend_long idx[NUMPHP_MAX_NDIM] = {0};
+    for (zend_long n = 0; n < src->size; n++) {
+        zend_long s_off = 0;
+        for (int j = 0; j < src->ndim; j++) s_off += idx[j] * src->strides[j];
+        double x = numphp_read_f64(src_base + s_off, src->dtype);
+        double r = apply_double(op, x);
+        numphp_write_scalar_at(dst + n * out_size, out_dt, r, (zend_long)r);
+        for (int j = src->ndim - 1; j >= 0; j--) {
+            if (++idx[j] < src->shape[j]) break;
+            idx[j] = 0;
+        }
+    }
+    return out;
+}
+
+numphp_ndarray *numphp_apply_clip(numphp_ndarray *src, int has_min, double minv, int has_max, double maxv)
+{
+    numphp_ndarray *out = numphp_ndarray_alloc_owner(src->dtype, src->ndim, src->shape);
+    if (out->size == 0) return out;
+
+    char *src_base = (char *)src->buffer->data + src->offset;
+    char *dst = (char *)out->buffer->data;
+    zend_long itemsize = out->itemsize;
+    int is_int = (src->dtype == NUMPHP_INT32 || src->dtype == NUMPHP_INT64);
+
+    zend_long idx[NUMPHP_MAX_NDIM] = {0};
+    for (zend_long n = 0; n < src->size; n++) {
+        zend_long s_off = 0;
+        for (int j = 0; j < src->ndim; j++) s_off += idx[j] * src->strides[j];
+
+        if (is_int) {
+            int64_t v = numphp_read_i64(src_base + s_off, src->dtype);
+            if (has_min && (double)v < minv) v = (int64_t)minv;
+            if (has_max && (double)v > maxv) v = (int64_t)maxv;
+            numphp_write_scalar_at(dst + n * itemsize, src->dtype, (double)v, (zend_long)v);
+        } else {
+            double v = numphp_read_f64(src_base + s_off, src->dtype);
+            if (has_min && v < minv) v = minv;
+            if (has_max && v > maxv) v = maxv;
+            numphp_write_scalar_at(dst + n * itemsize, src->dtype, v, (zend_long)v);
+        }
+
+        for (int j = src->ndim - 1; j >= 0; j--) {
+            if (++idx[j] < src->shape[j]) break;
+            idx[j] = 0;
+        }
+    }
+    return out;
+}
+
+/* PHP-compatible round-half-away-from-zero. Matches PHP's default round() mode
+ * (PHP_ROUND_HALF_UP). DELIBERATELY differs from NumPy's banker's rounding.
+ * See docs/sprints/09-stats-and-math-functions.md "round-half semantics". */
+static double round_half_away_from_zero(double x, int decimals)
+{
+    if (isnan(x) || isinf(x)) return x;
+    double f = pow(10.0, (double)decimals);
+    if (x >= 0) return floor(x * f + 0.5) / f;
+    return -floor(-x * f + 0.5) / f;
+}
+
+numphp_ndarray *numphp_apply_round(numphp_ndarray *src, int decimals)
+{
+    numphp_ndarray *out = numphp_ndarray_alloc_owner(src->dtype, src->ndim, src->shape);
+    if (out->size == 0) return out;
+
+    char *src_base = (char *)src->buffer->data + src->offset;
+    char *dst = (char *)out->buffer->data;
+    zend_long itemsize = out->itemsize;
+    int is_int = (src->dtype == NUMPHP_INT32 || src->dtype == NUMPHP_INT64);
+
+    zend_long idx[NUMPHP_MAX_NDIM] = {0};
+    for (zend_long n = 0; n < src->size; n++) {
+        zend_long s_off = 0;
+        for (int j = 0; j < src->ndim; j++) s_off += idx[j] * src->strides[j];
+
+        if (is_int) {
+            /* Integer round → identity (decimals shouldn't matter for int values). */
+            double dv = 0.0; zend_long lv = 0;
+            numphp_read_scalar_at(src_base + s_off, src->dtype, &dv, &lv);
+            numphp_write_scalar_at(dst + n * itemsize, src->dtype, dv, lv);
+        } else {
+            double v = numphp_read_f64(src_base + s_off, src->dtype);
+            v = round_half_away_from_zero(v, decimals);
+            numphp_write_scalar_at(dst + n * itemsize, src->dtype, v, (zend_long)v);
+        }
+
+        for (int j = src->ndim - 1; j >= 0; j--) {
+            if (++idx[j] < src->shape[j]) break;
+            idx[j] = 0;
+        }
+    }
+    return out;
+}
+
+numphp_ndarray *numphp_apply_power_scalar(numphp_ndarray *src, double exponent)
+{
+    /* Output dtype: integer base + integer exponent → preserve input dtype.
+     * Otherwise → float64. (NumPy's pow promotes int**int to int.) */
+    int int_in = (src->dtype == NUMPHP_INT32 || src->dtype == NUMPHP_INT64);
+    int int_exp = (exponent == floor(exponent) && exponent >= 0.0);
+    numphp_dtype out_dt = (int_in && int_exp) ? src->dtype : NUMPHP_FLOAT64;
+
+    numphp_ndarray *out = numphp_ndarray_alloc_owner(out_dt, src->ndim, src->shape);
+    if (out->size == 0) return out;
+
+    char *src_base = (char *)src->buffer->data + src->offset;
+    char *dst = (char *)out->buffer->data;
+    zend_long itemsize = out->itemsize;
+
+    zend_long idx[NUMPHP_MAX_NDIM] = {0};
+    for (zend_long n = 0; n < src->size; n++) {
+        zend_long s_off = 0;
+        for (int j = 0; j < src->ndim; j++) s_off += idx[j] * src->strides[j];
+        double x = numphp_read_f64(src_base + s_off, src->dtype);
+        double r = pow(x, exponent);
+        numphp_write_scalar_at(dst + n * itemsize, out_dt, r, (zend_long)r);
+        for (int j = src->ndim - 1; j >= 0; j--) {
+            if (++idx[j] < src->shape[j]) break;
+            idx[j] = 0;
+        }
+    }
+    return out;
+}
+
+/* ============================================================================
+ * sort / argsort
+ *
+ * Strategy:
+ *   - axis = NUMPHP_AXIS_FLATTEN → flatten to 1-D contiguous, sort, return 1-D.
+ *   - else: walk outer indices, gather the strided line into a contiguous
+ *     scratch buffer, qsort, scatter back into the output.
+ *
+ * qsort is unstable for equal keys; documented in the sprint plan.
+ * ============================================================================ */
+
+/* Comparators in double-precision land. Argsort piggy-backs by sorting an
+ * (index, value) pair table. We use thread_local-ish module statics — fine for
+ * NTS-only. */
+static double *g_sort_values = NULL;
+
+static int cmp_idx_by_value_asc(const void *pa, const void *pb)
+{
+    zend_long ia = *(const zend_long *)pa;
+    zend_long ib = *(const zend_long *)pb;
+    double va = g_sort_values[ia];
+    double vb = g_sort_values[ib];
+    /* NaNs sort to the end (NumPy convention). */
+    int na = isnan(va), nb = isnan(vb);
+    if (na && nb) return 0;
+    if (na) return 1;
+    if (nb) return -1;
+    if (va < vb) return -1;
+    if (va > vb) return 1;
+    return 0;
+}
+
+static int cmp_double_asc(const void *pa, const void *pb)
+{
+    double a = *(const double *)pa;
+    double b = *(const double *)pb;
+    int na = isnan(a), nb = isnan(b);
+    if (na && nb) return 0;
+    if (na) return 1;
+    if (nb) return -1;
+    if (a < b) return -1;
+    if (a > b) return 1;
+    return 0;
+}
+
+static int cmp_int64_asc(const void *pa, const void *pb)
+{
+    int64_t a = *(const int64_t *)pa;
+    int64_t b = *(const int64_t *)pb;
+    if (a < b) return -1;
+    if (a > b) return 1;
+    return 0;
+}
+
+/* Sort one strided line into out_ptr (also strided). Compute in input dtype to
+ * avoid roundtripping; specialise int64 / int32 / f32 / f64. */
+static void sort_line(const char *p, zend_long stride, zend_long n,
+                      numphp_dtype dt,
+                      char *out_ptr, zend_long out_stride)
+{
+    if (n <= 0) return;
+
+    if (dt == NUMPHP_INT64 || dt == NUMPHP_INT32) {
+        int64_t *buf = emalloc(sizeof(int64_t) * n);
+        for (zend_long i = 0; i < n; i++) buf[i] = numphp_read_i64(p + i * stride, dt);
+        qsort(buf, (size_t)n, sizeof(int64_t), cmp_int64_asc);
+        for (zend_long i = 0; i < n; i++) {
+            numphp_write_scalar_at(out_ptr + i * out_stride, dt, (double)buf[i], (zend_long)buf[i]);
+        }
+        efree(buf);
+        return;
+    }
+
+    /* Float path (f32 or f64). Use double scratch. */
+    double *buf = emalloc(sizeof(double) * n);
+    for (zend_long i = 0; i < n; i++) buf[i] = numphp_read_f64(p + i * stride, dt);
+    qsort(buf, (size_t)n, sizeof(double), cmp_double_asc);
+    for (zend_long i = 0; i < n; i++) {
+        numphp_write_scalar_at(out_ptr + i * out_stride, dt, buf[i], (zend_long)buf[i]);
+    }
+    efree(buf);
+}
+
+/* Argsort one strided line. Output is int64. */
+static void argsort_line(const char *p, zend_long stride, zend_long n,
+                         numphp_dtype dt,
+                         char *out_ptr, zend_long out_stride)
+{
+    if (n <= 0) return;
+
+    /* Materialise values into a flat double array, then sort an index array against it. */
+    double *vals = emalloc(sizeof(double) * n);
+    for (zend_long i = 0; i < n; i++) vals[i] = numphp_read_f64(p + i * stride, dt);
+
+    zend_long *idx = emalloc(sizeof(zend_long) * n);
+    for (zend_long i = 0; i < n; i++) idx[i] = i;
+
+    g_sort_values = vals;
+    qsort(idx, (size_t)n, sizeof(zend_long), cmp_idx_by_value_asc);
+    g_sort_values = NULL;
+
+    for (zend_long i = 0; i < n; i++) {
+        *(int64_t *)(out_ptr + i * out_stride) = (int64_t)idx[i];
+    }
+
+    efree(idx);
+    efree(vals);
+}
+
+static numphp_ndarray *sort_or_argsort(numphp_ndarray *src, int axis, int do_argsort)
+{
+    /* Flatten case */
+    if (axis == NUMPHP_AXIS_FLATTEN || src->ndim == 0) {
+        numphp_ndarray *contig = numphp_materialize_contiguous(src);
+        zend_long flat_shape[1] = { contig->size };
+        numphp_dtype out_dt = do_argsort ? NUMPHP_INT64 : src->dtype;
+        numphp_ndarray *out = numphp_ndarray_alloc_owner(out_dt, 1, flat_shape);
+        if (contig->size > 0) {
+            char *src_p = (char *)contig->buffer->data + contig->offset;
+            char *dst   = (char *)out->buffer->data;
+            zend_long s_stride = contig->itemsize;
+            zend_long d_stride = out->itemsize;
+            if (do_argsort) argsort_line(src_p, s_stride, contig->size, src->dtype, dst, d_stride);
+            else            sort_line   (src_p, s_stride, contig->size, src->dtype, dst, d_stride);
+        }
+        if (contig != src) numphp_ndarray_free(contig);
+        return out;
+    }
+
+    /* Axis case */
+    int ax = axis;
+    if (ax < 0) ax += src->ndim;
+    if (ax < 0 || ax >= src->ndim) {
+        zend_throw_exception_ex(numphp_shape_exception_ce, 0,
+            "axis %d out of range for ndim %d", axis, src->ndim);
+        return NULL;
+    }
+
+    numphp_ndarray *contig = (src->flags & NUMPHP_C_CONTIGUOUS)
+        ? src : numphp_materialize_contiguous(src);
+    int owns_contig = (contig != src);
+
+    numphp_dtype out_dt = do_argsort ? NUMPHP_INT64 : src->dtype;
+    numphp_ndarray *out = numphp_ndarray_alloc_owner(out_dt, src->ndim, src->shape);
+
+    char *src_base = (char *)contig->buffer->data + contig->offset;
+    char *dst_base = (char *)out->buffer->data;
+    zend_long axis_n = src->shape[ax];
+    zend_long src_axis_stride = contig->strides[ax];
+    zend_long dst_axis_stride = out->strides[ax];
+
+    /* Walk all outer combinations. */
+    zend_long idx[NUMPHP_MAX_NDIM] = {0};
+    zend_long outer_total = (axis_n > 0) ? (src->size / axis_n) : 0;
+
+    for (zend_long n = 0; n < outer_total; n++) {
+        zend_long s_off = 0, d_off = 0;
+        for (int i = 0; i < src->ndim; i++) {
+            if (i == ax) continue;
+            s_off += idx[i] * contig->strides[i];
+            d_off += idx[i] * out->strides[i];
+        }
+        if (do_argsort) {
+            argsort_line(src_base + s_off, src_axis_stride, axis_n, src->dtype,
+                         dst_base + d_off, dst_axis_stride);
+        } else {
+            sort_line(src_base + s_off, src_axis_stride, axis_n, src->dtype,
+                      dst_base + d_off, dst_axis_stride);
+        }
+        for (int i = src->ndim - 1; i >= 0; i--) {
+            if (i == ax) continue;
+            if (++idx[i] < src->shape[i]) break;
+            idx[i] = 0;
+        }
+    }
+
+    if (owns_contig) numphp_ndarray_free(contig);
+    return out;
+}
+
+numphp_ndarray *numphp_sort(numphp_ndarray *src, int axis)
+{
+    return sort_or_argsort(src, axis, 0);
+}
+
+numphp_ndarray *numphp_argsort(numphp_ndarray *src, int axis)
+{
+    return sort_or_argsort(src, axis, 1);
+}

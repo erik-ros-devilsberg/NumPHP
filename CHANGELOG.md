@@ -1,0 +1,115 @@
+# Changelog
+
+All notable changes to numphp are documented in this file.
+
+The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
+and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
+
+## [Unreleased]
+
+## [0.0.7] — 2026-04-29
+
+### Added
+- **Reductions** with `axis` and `keepdims`: `sum`, `mean`, `min`, `max`, `var`, `std`, `argmin`, `argmax`. All instance methods on `NDArray`. Pass `axis = null` (or omit) for a global reduction; pass an int (negative allowed) to collapse one axis. `keepdims = true` preserves the reduced axis as size 1 for broadcast-back.
+- **Numerical stability:** `mean` uses pairwise sum (recursive halving with leaf 8). `var` and `std` use **Welford's online algorithm** — single pass, no catastrophic cancellation. `var($axis, $keepdims, $ddof)` accepts a Bessel correction (`ddof = 1` for sample variance).
+- **NaN-aware variants:** `nansum`, `nanmean`, `nanmin`, `nanmax`, `nanvar`, `nanstd`, `nanargmin`, `nanargmax`. Skip NaN inputs in float dtypes; alias the regular form for integer dtypes. All-NaN slice → `nansum` returns 0, `nanmean`/`nanmin`/`nanmax` return NaN, `nanargmin`/`nanargmax` throw `\NDArrayException`.
+- **Element-wise math:** `sqrt`, `exp`, `log`, `log2`, `log10`, `abs`, `power($exp)`, `clip(?float $min, ?float $max)`, `floor`, `ceil`, `round(int $decimals = 0)`. Domain rules follow IEEE 754 (`sqrt(-x)` = NaN, `log(0)` = -inf), no exception. Output dtype: `sqrt` preserves float dtype, integer → f64; `exp`/`log*` always f64; `abs`/`floor`/`ceil`/`clip` preserve dtype.
+- **Sort:** `sort(?int $axis = -1)` and `argsort(?int $axis = -1)`. Default sorts the last axis; explicit `null` flattens then sorts. Negative axis allowed. Backed by `qsort` (unstable for equal keys — distinct-value tests lock the documented behavior). `argsort` always returns int64.
+- **Output dtype rules** for reductions: `sum` of int → int64; `mean`/`var`/`std` of int → float64; `min`/`max` preserve dtype; `argmin`/`argmax` always int64.
+- 7 new phpt tests (`032-…` through `038-…`) covering reductions, NaN-variants, math ops, sort/argsort, edge cases.
+
+### Notes — round-half semantics (deliberate divergence from NumPy)
+
+`NDArray::round()` rounds **half-away-from-zero** (PHP's default `round()` mode, `PHP_ROUND_HALF_UP`). This matches the PHP scalar `round()` and the common user expectation that `round(0.5) === 1.0`.
+
+NumPy's `np.round` uses banker's rounding (half-to-even): `np.round(0.5)` is `0.0`, `np.round(1.5)` is `2.0`. **numphp does not.** `[0.5, 1.5, 2.5, -0.5, -1.5]->round() === [1.0, 2.0, 3.0, -1.0, -2.0]`. This is locked by `tests/036-elementwise-math.phpt`. See `docs/system.md` Architectural Decisions for the full rationale.
+
+### Refactor
+- `ops.c` is no longer a stub. All reduction kernels, element-wise math, and sort live there. Methods in `ndarray.c` are thin PHP_METHOD wrappers around the kernels.
+- Promoted `read_scalar_at`, `write_scalar_at`, and `materialize_contiguous` to exported symbols (`numphp_read_scalar_at`, `numphp_write_scalar_at`, `numphp_materialize_contiguous`) so kernels in `ops.c` can use them.
+
+### Deferred
+- `median`, `percentile`, `quantile`, `cumsum`, `cumprod`.
+- Multi-axis tuple reductions (`sum(axis=(0, 2))`) — chain `sum(0)->sum(0)`.
+- Stable sort guarantee.
+- In-place sort.
+- Array-valued exponent in `power($a)` (currently scalar exponent only).
+
+## [0.0.6] — 2026-04-28
+
+### Added
+- `NDArray::dot($a, $b)` — 1-D inner product via `cblas_ddot` / `cblas_sdot`. Returns PHP `float`.
+- `NDArray::matmul($a, $b)` — 2-D matrix multiply via `cblas_dgemm` / `cblas_sgemm`.
+- `NDArray::inner($a, $b)` — 1-D alias for dot semantics; nD inputs throw with a "use matmul" pointer.
+- `NDArray::outer($a, $b)` — 1-D × 1-D → 2-D rank-1 update via `cblas_dger` / `cblas_sger`.
+- Pure float32 inputs run on the s-path; everything else (float64, mixed, integer) promotes to float64 and runs the d-path.
+- Non-contiguous inputs are materialised contiguously before the BLAS call (`ensure_contig_dtype` helper).
+
+### Deferred
+- 3D+ batched matmul.
+- Native int matmul (currently promotes to float64).
+- Strided BLAS (passing `lda` for views with unit inner stride) — saves the copy on transposed inputs.
+
+## [0.0.5] — 2026-04-28
+
+### Added
+- `$a->reshape($shape)` with `-1` placeholder inference; returns a view when the source is C-contiguous, else a contiguous copy.
+- `$a->transpose($axes = null)` reverses axes by default or applies an explicit permutation. Always a view.
+- `$a->flatten()` returns a 1-D C-contiguous copy.
+- `$a->squeeze($axis = null)` drops size-1 dims; named non-1 axis throws `\ShapeException`.
+- `$a->expandDims($axis)` inserts a size-1 dim with stride 0 (broadcast-friendly).
+- `NDArray::concatenate($arrays, $axis = 0)` static; joins along an existing axis with cross-input dtype promotion.
+- `NDArray::stack($arrays, $axis = 0)` static; adds a new axis; all input shapes must match exactly.
+- 6 new phpt tests covering each operation, edge cases, and error paths.
+
+## [0.0.4] — 2026-04-28
+
+### Added
+- `numphp_nditer` — broadcast-aware nd-iterator with up to 4 operands, used as the engine for element-wise ops and (later) reductions and BLAS dispatch.
+- `numphp_broadcast_shape` and `numphp_promote_dtype` helpers; promotion table from `docs/system.md` is now executable.
+- `NDArray::add`, `subtract`, `multiply`, `divide` static methods. Operands may be `NDArray` or scalar.
+- Operator overloading for `+ - * /` via `do_operation`. `$a + $b` works for `NDArray + NDArray`, `NDArray + scalar`, and `scalar + NDArray`. Compound `$a += $b` composes via PHP's default behavior.
+- Float division by zero follows IEEE 754; int division by zero throws `\DivisionByZeroError`.
+- Incompatible broadcast shapes throw `\ShapeException` with the offending axis.
+- 6 new phpt tests (matching-shape arithmetic, broadcasting, operator overload, dtype promotion, divzero, shape mismatch).
+
+### Deferred
+- True buffer-mutating in-place methods (`$a->addInplace($b)`).
+
+## [0.0.3] — 2026-04-28
+
+### Added
+- `ArrayAccess` and `Countable` interfaces on `NDArray`.
+- `$a[$i]` / `$a->offsetGet($i)` returns scalar (1D) or view (nD), with negative indexing.
+- `$a[$i] = $value` supports scalar (1D), scalar broadcast (nD), and shape-matched `NDArray` RHS.
+- `count($a)` and `$a->count()` return total elements.
+- `NDArray::slice($start, $stop, $step = 1)` returns an axis-0 view.
+- Views share the parent's refcounted buffer; mutations through views propagate; cloning a view deep-copies.
+- 5 new phpt tests covering offsetGet, offsetSet, Countable, slice, and view-sharing semantics.
+
+### Deferred
+- Negative `step` in `slice` and multi-axis tuple slicing (Story 6+ / Story 7).
+- PHP-array RHS in `$a[$i] = […]` (waits on Story 7 broadcasting).
+
+## [0.0.2] — 2026-04-28
+
+### Added
+- `numphp_buffer` (refcounted data buffer) and `numphp_ndarray` (metadata shell) structs.
+- `NDArray` class with create / free / clone object handlers; clone deep-copies through strides.
+- Static creation API: `zeros`, `ones`, `full`, `eye`, `arange`, `fromArray`.
+- Instance metadata accessors: `shape`, `dtype`, `size`, `ndim`.
+- `toArray` (recursive PHP-array reconstruction) — pulled forward from Story 11.
+- 8 phpt tests covering each creation method, dtype inference, ragged rejection, metadata, and `toArray`/clone round-trip.
+
+## [0.0.1] — 2026-04-28
+
+### Added
+- Project skeleton: `config.m4`, module entry, `MINIT`, `MINFO`.
+- Exception class hierarchy: `NDArrayException` (extends `\RuntimeException`),
+  `ShapeException`, `DTypeException`, `IndexException` — all registered in `MINIT`.
+- Header stubs and empty translation units for `ndarray`, `ops`, `linalg`, `nditer`
+  so the build graph is stable across upcoming stories.
+- Test infrastructure: phpt files for extension load and exception registration.
+- CI: GitHub Actions matrix over PHP 8.2 / 8.3 / 8.4 on Linux, with valgrind,
+  gcov coverage, and macOS as non-blocking lanes.
+- Cross-cutting decisions captured in `docs/system.md`.

@@ -1,0 +1,56 @@
+# phpize / autoconf generated
+acinclude.m4
+aclocal.m4
+autom4te.cache/
+build/
+config.guess
+config.h
+config.h.in
+config.log
+config.nice
+config.status
+config.sub
+configure
+configure.ac
+include/
+install-sh
+libtool
+ltmain.sh
+missing
+mkinstalldirs
+run-tests.php
+
+# Make output
+Makefile
+Makefile.fragments
+Makefile.global
+Makefile.objects
+*.dep
+*.lo
+*.la
+*.o
+.libs/
+modules/
+
+# Coverage
+*.gcda
+*.gcno
+*.gcov
+coverage/
+
+# Test artifacts
+tests/*.diff
+tests/*.exp
+tests/*.log
+tests/*.out
+tests/*.php
+tests/*.sh
+php_test_results_*.txt
+tmp-php.ini
+
+# Editor / OS
+.vscode/
+.idea/
+*.swp
+*~
+.DS_Store
