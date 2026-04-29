@@ -3,7 +3,8 @@
 
 #include "numphp.h"
 
-/* Implemented in Story 8 (BLAS integration) and Story 10 (LAPACK linalg).
- * Stub so the build links cleanly. */
+extern zend_class_entry *numphp_linalg_ce;
+
+void numphp_register_linalg_class(void);
 
 #endif /* NUMPHP_LINALG_H */

@@ -93,13 +93,40 @@ Integer dtypes have no NaN; nan-variants on int dtypes are aliases of the regula
 
 `sort` and `argsort` use `qsort` and are **not stable** for equal keys. The order of equal elements is unspecified. Tests use distinct values to avoid relying on tie-break behavior. If a user need arises for stable sort, switch the implementation to a mergesort variant.
 
-## Open Items / Caveats
+### 2026-04-29 — Sprint: Linear Algebra Module
+
+#### 12. Raw LAPACK over LAPACKE
+
+Linalg calls Fortran-mangled LAPACK symbols directly (`dgetrf_`, `dgesv_`, `dgesdd_`, `dgeev_`, `sgetrf_`, …). LAPACKE was rejected because (a) macOS Accelerate doesn't ship LAPACKE, and (b) it strips control over layout / error reporting. NumPy made the same choice; we follow.
+
+#### 13. LAPACK symbol portability via `lapack_names.h`
+
+Linux and reference LAPACK export Fortran-mangled symbols with a trailing underscore (`dgetri_`); macOS Accelerate exports without (`dgetri`). `config.m4` probes both names. If only the no-underscore form resolves, `AC_DEFINE([NUMPHP_LAPACK_NO_USCORE], [1])`. `lapack_names.h` then `#define`s every symbol Story 10 touches to the bare name, so call sites in `linalg.c` always write the underscored form. **Adding a new LAPACK routine requires a one-line addition to `lapack_names.h`** — single source of truth.
+
+#### 14. Layout strategy — uniform F-contig copy
+
+Every linalg op materialises 2-D inputs into an F-contiguous (column-major) scratch buffer of the right dtype, calls LAPACK, then transpose-copies the result back to a row-major `NDArray`. The "transpose trick" (interpret row-major bytes as column-major to skip the copy) works for `inv` and `det` but **fails for multi-RHS `solve`, `svd`, and `eig`** — see open item below for the math. Uniform col-major copy keeps the code simple and correct. Zero-copy fast path on `inv`/`det` and strided LAPACK (passing `LDA` for views) are deferred.
+
+#### 15. eig — real eigenvalues only in v1
+
+`Linalg::eig` throws `\NDArrayException` if any returned eigenvalue has nonzero imaginary part. Exception message names the offending index and the imaginary magnitude — informative enough for users to diagnose. Workaround until v2 lands complex dtype: ensure input is symmetric (`A == A^T`).
+
+#### 16. SVD — thin only in v1
+
+`Linalg::svd` always uses `JOBZ='S'`. Output shapes: `U` is `(m, k)`, `S` is `(k,)`, `Vt` is `(k, n)`, where `k = min(m, n)`. Full SVD (`JOBZ='A'`) deferred — adding a `full_matrices = true` keyword later is non-breaking.
+
+#### 17. norm — Frobenius substitutes for matrix-2 in v1
+
+`Linalg::norm($matrix, 2)` returns the Frobenius norm, not the spectral (largest singular value) norm. The spectral norm requires running a full SVD; defer until a user needs it. Vector-2 norm (Euclidean) is unaffected.
 
 ## Open Items / Caveats
 
-- **LAPACK symbol portability on macOS.** `config.m4` probes for `dgetri_` (Fortran name-mangling, the Linux convention). On macOS Accelerate / some OpenBLAS builds the symbol is `dgetri` (no underscore). The macOS CI lane runs `continue-on-error: true`. To make macOS blocking, the probe needs a fallback that tries both names.
+## Open Items / Caveats
+
+- ~~**LAPACK symbol portability on macOS.**~~ **Fixed in Story 10.** `config.m4` now probes both `dgetri_` (Linux convention) and `dgetri` (macOS Accelerate). `lapack_names.h` aliases symbols when the no-underscore variant is in use. macOS CI lane is now blocking.
 - **gcov coverage gate parked.** CI runs the gcov job as `continue-on-error: true` until Story 2 lands substantive code. Flip to blocking when `ndarray.c` has real implementation.
 - **Nothing depends on `nditer.c` yet.** The empty TU is listed in `PHP_NEW_EXTENSION` so the build graph stays stable. If a header declaration is added without a definition the linker fails loud — that is the intended canary.
+- **Transpose-trick zero-copy deferral.** `inv` and `det` could skip the F-contig copy via the column-major reinterpretation trick (row-major bytes interpreted as column-major = transpose; `inv(A^T) = inv(A)^T` and `det(A^T) = det(A)`). `solve`, `svd`, `eig` cannot use the trick safely. v1 ships uniform copy for simplicity; revisit if profiling shows the copy is hot.
 
 ## Sprint Outcomes
 
@@ -110,3 +137,4 @@ Integer dtypes have no NaN; nan-variants on int dtypes are aliases of the regula
 - **2026-04-28 — `shape-manipulation`** delivered `reshape` (with `-1` inference, contiguity-aware view-vs-copy), `transpose` (default reverse + explicit permutation; always a view), `flatten` (contiguous 1-D copy), `squeeze` / `expandDims` (size-1 dim manipulation; views), and the static `concatenate` / `stack` (copy-based, dtype-promoted across inputs). Helper `materialize_contiguous` is shared between reshape's non-contig path and any future op that needs a contiguous copy. `NUMPHP_CONCAT_MAX = 64` caps the number of inputs to `concatenate` / `stack`, stack-allocated for cache friendliness. 6 new phpt tests; all 27 tests green.
 - **2026-04-28 — `blas-integration`** wired `dot`, `matmul`, `inner`, `outer` to OpenBLAS. Pure float32 inputs use the s-path (`cblas_sdot` / `cblas_sgemm` / `cblas_sger`); everything else promotes to float64 and uses the d-path. The promotion rule is "if either input is non-f32 (i.e. f64 or any int), promote both to f64" — wider than the elementwise table because BLAS has no integer routines. `ensure_contig_dtype` materialises non-contiguous or wrong-dtype inputs to fresh contiguous owners before the BLAS call. cblas.h lives at `/usr/include/x86_64-linux-gnu/cblas.h` on Ubuntu (multi-arch); GCC finds it without an explicit `-I`. Deferred: 3D+ batched matmul, native-int matmul, and strided BLAS (passing `lda` instead of copying for transposed views with unit inner stride). 4 new phpt tests; all 31 tests green.
 - **2026-04-29 — `stats-and-math-functions`** delivered the full reduction surface (`sum`/`mean`/`min`/`max`/`var`/`std`/`argmin`/`argmax`) with `axis` + `keepdims`, NaN-aware variants of all eight, element-wise math (`sqrt`/`exp`/`log`/`log2`/`log10`/`abs`/`power`/`clip`/`floor`/`ceil`/`round`), and `sort`/`argsort`. `var` and `std` use Welford's online algorithm; `mean` uses pairwise sum (recursive halving with leaf 8). `ops.c` is no longer a stub — all kernels live there; `ndarray.c` keeps thin PHP_METHOD wrappers and the method table. `read_scalar_at`, `write_scalar_at`, and `materialize_contiguous` were promoted to exported `numphp_*` symbols so `ops.c` can reuse them. Sort is `qsort`-backed and unstable for equal keys (documented in decision 11). Decision 8 records the deliberate divergence from NumPy on round-half semantics — locked by a dedicated test. The `axis_zv == NULL` C-pointer trick distinguishes "argument omitted" from "explicit `null`" in `sort`/`argsort` (omitted → axis = -1, explicit null → flatten). 7 new phpt tests; all 38 tests green; build clean at -Wall -Wextra. Deferred: array-valued power exponent, multi-axis tuple reductions, median/percentile/quantile, stable sort, in-place sort, cumsum/cumprod.
+- **2026-04-29 — `linear-algebra-module`** delivered the `Linalg` static class — `inv`, `det`, `solve`, `svd`, `eig`, `norm` — backed by raw LAPACK (`dgetrf` / `dgetri` / `dgesv` / `dgesdd` / `dgeev`). Decision 12 picks raw LAPACK over LAPACKE (matching NumPy); decision 13 isolates platform symbol-name differences in `lapack_names.h` and the `config.m4` probe, which now tries both `dgetri_` and `dgetri` so macOS Accelerate works — the macOS CI lane flipped from `continue-on-error: true` to blocking. Decision 14 adopts uniform F-contig copy at the LAPACK boundary; the zero-copy "transpose trick" is deferred (still works mathematically for `inv`/`det`, but the copy keeps the code uniform and correct). Decision 15 restricts `eig` to real eigenvalues in v1 (informative exception names the offending eigenvalue index); decision 16 ships only thin SVD; decision 17 substitutes Frobenius for matrix-2 norm. Layout helper: every op uses `copy_to_fcontig_*` to produce column-major scratch, calls LAPACK, then `fcontig_to_ndarray_*` to transpose-copy back. f32 dispatch uses `s*` LAPACK only when both inputs are pure f32 — same rule as Story 8 BLAS. `ensure_contig_dtype` was promoted to exported `numphp_ensure_contig_dtype`. 7 new phpt tests use asymmetric matrices specifically (e.g. `[[4,7],[2,6]]`, `[[4,2,1],[3,5,1],[1,1,3]]`) so transpose-trick bugs cannot hide behind symmetric inputs. All 45 tests green; build clean at -Wall -Wextra. Deferred: `qr`/`cholesky`/`pinv`/`lstsq`/`matrix_rank`/`slogdet`, full SVD, complex dtype, batched 3-D+ linalg, spectral matrix-2, strided LAPACK.

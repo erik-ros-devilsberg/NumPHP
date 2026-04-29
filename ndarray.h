@@ -66,6 +66,11 @@ void numphp_write_scalar_at(char *p, numphp_dtype dt, double dv, zend_long lv);
 /* Allocate a fresh C-contiguous owner and copy `src` into it (any layout). */
 numphp_ndarray *numphp_materialize_contiguous(numphp_ndarray *src);
 
+/* If `src` is already C-contiguous AND already in `target_dt`, returns src and sets
+ * *out_owned = 0. Otherwise allocates a fresh C-contiguous owner with values cast
+ * to target_dt and sets *out_owned = 1 (caller must free). */
+numphp_ndarray *numphp_ensure_contig_dtype(numphp_ndarray *src, numphp_dtype target_dt, int *out_owned);
+
 static inline numphp_ndarray_object *numphp_obj_from_zo(zend_object *zo) {
     return (numphp_ndarray_object *)((char *)zo - XtOffsetOf(numphp_ndarray_object, std));
 }

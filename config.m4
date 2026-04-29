@@ -14,9 +14,18 @@ if test "$PHP_NUMPHP" != "no"; then
     [PHP_ADD_LIBRARY(openblas,, NUMPHP_SHARED_LIBADD)],
     [AC_MSG_ERROR([OpenBLAS (libopenblas) with cblas_dgemm not found])])
 
+  dnl LAPACK symbol probe.
+  dnl Linux convention: Fortran-mangled with trailing underscore (dgetri_).
+  dnl macOS Accelerate / some BLAS distributions: no underscore (dgetri).
+  dnl Try the underscored name first; fall back to the no-underscore name and
+  dnl define NUMPHP_LAPACK_NO_USCORE so lapack_names.h aliases the symbols.
   PHP_CHECK_LIBRARY(lapack, dgetri_,
     [PHP_ADD_LIBRARY(lapack,, NUMPHP_SHARED_LIBADD)],
-    [AC_MSG_ERROR([LAPACK (liblapack) with dgetri_ not found])])
+    [PHP_CHECK_LIBRARY(lapack, dgetri,
+       [PHP_ADD_LIBRARY(lapack,, NUMPHP_SHARED_LIBADD)
+        AC_DEFINE([NUMPHP_LAPACK_NO_USCORE], [1],
+                  [Define if LAPACK symbols are exported without trailing underscore (e.g. macOS Accelerate)])],
+       [AC_MSG_ERROR([LAPACK (liblapack) not found: tried dgetri_ and dgetri])])])
 
   PHP_SUBST(NUMPHP_SHARED_LIBADD)
 

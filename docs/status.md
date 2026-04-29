@@ -11,3 +11,4 @@ Maintained by the agile plugin. One row per sprint — updated by `/agile:shape`
 | Shape Manipulation | shape-manipulation | completed | reshape, transpose, flatten, squeeze, expandDims, concatenate, stack. |
 | BLAS Integration | blas-integration | completed | dot, matmul, inner, outer wired to OpenBLAS (s* and d* paths); int → f64 promotion. |
 | Statistical & Mathematical Functions | stats-and-math-functions | completed | Reductions (sum/mean/min/max/std/var/argmin/argmax) with axis+keepdims, Welford, NaN-aware variants, element-wise math, sort/argsort. |
+| Linear Algebra Module | linear-algebra-module | completed | `Linalg` static class (inv/det/svd/eig/solve/norm) backed by raw LAPACK; macOS symbol probe fix flipped CI to blocking. |

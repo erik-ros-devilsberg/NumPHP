@@ -36,6 +36,7 @@ PHP_MINIT_FUNCTION(numphp)
         zend_register_internal_class_ex(&ce, numphp_ndarray_exception_ce);
 
     numphp_register_ndarray_class();
+    numphp_register_linalg_class();
 
     return SUCCESS;
 }

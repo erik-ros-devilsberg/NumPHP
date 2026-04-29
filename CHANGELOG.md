@@ -7,6 +7,47 @@ and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.
 
 ## [Unreleased]
 
+## [0.0.8] — 2026-04-29
+
+### Added
+- **`Linalg` static class.** Six methods backed by raw LAPACK:
+  - `Linalg::inv($a): NDArray` — matrix inverse via `dgetrf` + `dgetri`.
+  - `Linalg::det($a): float` — determinant via `dgetrf` (product of U diagonal × pivot sign).
+  - `Linalg::solve($a, $b): NDArray` — `Ax = b` via `dgesv`. `$b` may be 1-D (vector) or 2-D (multiple RHS).
+  - `Linalg::svd($a): array` — thin SVD `[U, S, Vt]` via `dgesdd` (`JOBZ='S'`).
+  - `Linalg::eig($a): array` — eigenvalues + right eigenvectors `[w, V]` via `dgeev`.
+  - `Linalg::norm($a, $ord = 2, $axis = null): float|NDArray` — vector norms (2, 1, INF) and matrix norms (Frobenius/'fro', 1, INF). Optional `$axis` for vector norms across rows/cols of a matrix.
+- f32 inputs run on the s-path (`sgetrf`, `sgesv`, `sgesdd`, `sgeev`); everything else (f64, mixed, integer) promotes to f64 and runs on the d-path. Same dispatch rule as Story 8 BLAS.
+- macOS LAPACK CI lane is now blocking. `config.m4` probes both `dgetri_` (Linux convention, with trailing underscore) and `dgetri` (macOS Accelerate convention, no underscore); on a successful no-underscore probe it defines `NUMPHP_LAPACK_NO_USCORE` so `lapack_names.h` aliases the symbols.
+- New `lapack_names.h` — single source of truth for all LAPACK symbol names. Adding a new routine = one line in this header.
+- 7 new phpt tests (`039-…` through `045-…`) covering each op + dtype dispatch + non-contiguous input.
+
+### Notes — eigenvalues are real-only in v1
+`Linalg::eig` throws `\NDArrayException` if the input has complex eigenvalues. The exception message names the offending eigenvalue index and its imaginary magnitude. Workaround: ensure the input is symmetric (`A == A^T`) — guaranteed real eigenvalues. Complex dtype lands in v2.
+
+### Notes — SVD is thin only in v1
+`Linalg::svd` always returns the thin (economy) SVD: `U` is `(m, k)`, `Vt` is `(k, n)`, where `k = min(m, n)`. The full SVD (`JOBZ='A'`, with `U` as `(m, m)` and `Vt` as `(n, n)`) is deferred — most users want the thin form, and matching NumPy's `full_matrices = True` keyword can come later without breaking changes.
+
+### Notes — matrix-2 norm
+`Linalg::norm($matrix, 2)` returns the Frobenius norm in v1 instead of the spectral (largest singular value) norm. Document the divergence; the spectral norm requires running an SVD on every call, which is expensive — defer until a user needs it. Vector-2 norm is unaffected (Euclidean).
+
+### Refactor
+- `linalg.c` is no longer a stub. All six ops live there as PHP_METHODs + per-dtype kernels.
+- Promoted `ensure_contig_dtype` to an exported `numphp_ensure_contig_dtype` symbol so `linalg.c` can use it.
+- Bumped `PHP_NUMPHP_VERSION` to `0.0.8`.
+
+### Layout strategy
+Every linalg op materialises 2-D inputs into an F-contiguous (column-major) scratch buffer of the right dtype, hands that to LAPACK, then transpose-copies the result back into a row-major `NDArray`. The "transpose trick" (interpret row-major bytes as column-major to skip the copy) works for `inv` and `det` but breaks for multi-RHS `solve`, `svd`, and `eig` — uniform col-major copy keeps the code simple and correct. Performance optimisation (zero-copy fast path on `inv`/`det`, strided LAPACK with `LDA`) deferred.
+
+### Deferred
+- `qr`, `cholesky`, `pinv`, `lstsq`, `matrix_rank`, `slogdet`.
+- Full SVD (`full_matrices = true`).
+- Complex eigenvalues / complex dtype generally.
+- `norm` ords `-1`, `-2`, `-inf`, nuclear norm.
+- 3-D+ batched linalg (NumPy's "stack of matrices" semantics).
+- Spectral matrix-2 norm (largest singular value).
+- Strided LAPACK (passing `LDA` for views with unit inner stride).
+
 ## [0.0.7] — 2026-04-29
 
 ### Added

@@ -81,9 +81,8 @@ jobs:
       - run: gcovr -r . --filter ndarray.c --filter ops.c --print-summary
 
   macos:
-    name: macOS (non-blocking)
+    name: macOS
     runs-on: macos-latest
-    continue-on-error: true
     steps:
       - uses: actions/checkout@v4
       - uses: shivammathur/setup-php@v2

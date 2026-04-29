@@ -760,6 +760,7 @@ void numphp_read_scalar_at(const char *p, numphp_dtype dt, double *dv_out, zend_
 /* Local aliases so the rest of this TU doesn't need to be sed'd. */
 #define write_scalar_at numphp_write_scalar_at
 #define read_scalar_at  numphp_read_scalar_at
+#define ensure_contig_dtype numphp_ensure_contig_dtype
 
 /* ===== ArrayAccess + Countable handlers ===== */
 
@@ -1642,7 +1643,7 @@ PHP_METHOD(NDArray, stack)
 
 /* Returns src if already C-contiguous and of target_dt; otherwise a fresh contiguous
  * owner with values cast to target_dt. Sets *out_owned = 1 when caller must free. */
-static numphp_ndarray *ensure_contig_dtype(numphp_ndarray *src, numphp_dtype target_dt, int *out_owned)
+numphp_ndarray *numphp_ensure_contig_dtype(numphp_ndarray *src, numphp_dtype target_dt, int *out_owned)
 {
     if (src->dtype == target_dt && (src->flags & NUMPHP_C_CONTIGUOUS)) {
         *out_owned = 0;
