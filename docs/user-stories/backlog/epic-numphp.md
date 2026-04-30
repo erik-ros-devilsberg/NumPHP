@@ -36,7 +36,8 @@ These are locked in [Story 1](01-project-scaffolding.md) and referenced everywhe
 10. [Linear Algebra Module](10-linear-algebra-module.md)
 11. [Interoperability](11-interoperability.md)
 12. [PECL Packaging & Distribution](12-pecl-packaging.md)
-13. [Documentation & Community Seeding](13-docs-and-community.md)
+13. [Documentation, Examples, Tests & Benchmarks](13-docs-and-benchmarks.md)
+14. [Community Seeding & Outreach](14-community-and-outreach.md)
 
 ## Dependency Map
 
@@ -46,9 +47,10 @@ These are locked in [Story 1](01-project-scaffolding.md) and referenced everywhe
                 6    8 → 10
                 ↓
                 9
-2 → 11 (phases A → B → C)
+2 → 11 (phases A → B done; C deferred post-1.0)
 All → 12
-13 (parallel marketing track, starts after Story 8)
+13 (release-quality pass — docs, examples, tests, benchmarks)
+13 → 14 (outreach — only after release-quality bar is met)
 ```
 
 Note the **7 → 5** order: the nd-iterator from Story 7 is built before element-wise loops in Story 5, so element-wise ships broadcast-aware from day one.
