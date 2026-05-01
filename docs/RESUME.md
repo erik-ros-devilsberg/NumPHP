@@ -1,192 +1,168 @@
-# Resume Notes — 2026-05-01 (after sprint 13c)
-
-Pick up where this left off next session.
+# Resume Notes — 2026-05-01 (after sprint 16)
 
 ## Where we are
 
-**Version 0.0.13.** Pre-release, iterative. Building toward 0.1.0.
+**Version 0.0.14.** Pre-release, iterative. Building toward 0.1.0.
 
-**14 sprints shipped.** Build green at `-Wall -Wextra`; 61/61 phpt + 1
-cleanly skipped (FFI ext absent) + the doc-snippet harness running 75
-fenced ```php blocks on every PR. **Story 13 fully shipped** (Phases
-A + B + C); now resides in `docs/user-stories/done/`.
+**15 sprints shipped.** Build green at `-Wall -Wextra`; 61/61 phpt + 1
+FFI skip + doc-snippet harness running 75 fenced ```php blocks. Last
+sprint closed the two clear weak spots from the benchmark.
 
-| # | Sprint | Stories | Status | Version |
-|---|--------|---------|--------|---------|
-| 1 | project-scaffolding-architecture | 01 | ✓ | 0.0.1 |
-| 2 | ndarray-struct-and-creation-api | 02 + 03 | ✓ | 0.0.2 |
-| 3 | indexing-and-slicing | 04 | ✓ | 0.0.3 |
-| 4 | broadcasting-and-elementwise-ops | 05 + 07 | ✓ | 0.0.4 |
-| 5 | shape-manipulation | 06 | ✓ | 0.0.5 |
-| 6 | blas-integration | 08 | ✓ | 0.0.6 |
-| 7 | stats-and-math-functions | 09 | ✓ | 0.0.7 |
-| 8 | linear-algebra-module | 10 | ✓ | 0.0.8 |
-| 9 | php-arrays-and-file-io (Story 11 Phase A) | 11A | ✓ | 0.0.9 |
-| 10 | buffer-view (Story 11 Phase B) | 11B | ✓ | 0.0.10 |
-| 11 | documentation-pass (Story 13 Phase A) | 13A | ✓ | (no bump) |
-| 12 | 13b-examples-and-tests (Story 13 Phase B) | 13B | ✓ | 0.0.11 |
-| 13 | 15-project-layout (Story 15) | 15 | ✓ | 0.0.12 |
-| 14 | 13c-benchmarks (Story 13 Phase C) | 13C | ✓ | 0.0.13 |
+| # | Sprint | Stories | Version |
+|---|--------|---------|---------|
+| 1-13 | (see CHANGELOG) | | 0.0.1 → 0.0.12 |
+| 14 | 13c-benchmarks (Story 13 Phase C) | 13C | 0.0.13 |
+| 15 | 16-fastpath-optimizations (Story 16) | 16 | 0.0.14 |
 
 **Backlog:** Story 11 Phase C (Arrow IPC) post-1.0, Story 12 (PECL
-packaging — currently parked, see below), Story 14 (community +
-outreach).
+packaging — parked), Story 14 (community + outreach).
 
-## What just landed (sprint 13c)
+## What just landed (sprint 16)
 
-The first reproducible numphp-vs-NumPy benchmark.
+Two kernel additions, no API change, no SIMD intrinsics.
 
-- New `bench/` directory: `run.php` + `run.py` mirror runners driven
-  by a shared `scenarios.json`; `compare.py` joins them into a
-  Markdown table; `fingerprint.sh` captures hardware/BLAS/version
-  metadata; `run.sh` orchestrates.
-- 11 scenarios — element-wise add/multiply, matmul (f64 + f32),
-  `sum` along each axis, `fromArray`/`toArray` round-trip,
-  `Linalg::solve`, `Linalg::inv`, slice view-creation timer.
-- Methodology locked as **decision 30** in `docs/system.md` (7 runs,
-  drop slowest, median + min + max; deterministic seed; per-scenario
-  fixture allocation excluded except where the fixture is the
-  subject).
-- NumPy lives in `bench/.venv/` (gitignored). System Python untouched
-  — PEP 668-compliant. `bench/run.sh` creates the venv on first run.
-- First run committed as `docs/benchmarks.md` with the maintainer's
-  hardware fingerprint.
-- Smoke test `tests/061-bench-runner-smoke.phpt` — invokes the
-  runner via `proc_open`, asserts exit 0 + one JSON record. Doesn't
-  lock flaky timing numbers.
-- `PHP_NUMPHP_VERSION` → `0.0.13`.
-- Story 13 → `done/`.
+- **Element-wise contiguous fast path** in `src/ndarray.c::do_binary_op_core`.
+  Predicate: both inputs C-contig, same dtype as output, identical
+  shape (no broadcasting). Falls through to a flat typed-pointer
+  loop the compiler auto-vectorises at `-O2`.
+- **Axis-0 sum tiled kernel** in `src/ops.c::numphp_reduce`.
+  Predicate: 2-D C-contig f32/f64, axis=0, no NaN-skip. Strips of 32
+  columns; pairwise recursion on rows preserved per column → output
+  is bit-identical to the slow path.
 
-### What the numbers say
+Slow paths kept for everything outside the predicates (broadcasting,
+mixed dtype, non-contig, axis≠0, integer reductions, NaN-skip).
 
-On the maintainer's hardware (Intel m3-6Y30, OpenBLAS via apt,
-PHP 8.4, NumPy 2.4.4):
+### Numbers (vs NumPy on the maintainer's hardware)
 
-| Scenario | numphp | NumPy | ratio |
+| Scenario | Before (0.0.13) | After (0.0.14) | Verdict |
 |---|---|---|---|
-| matmul 1024² f64 | 73.6 ms | 72.4 ms | 1.02× |
-| matmul 1024² f32 | 37.4 ms | 37.5 ms | 1.00× |
-| Linalg::inv 500² | 23.7 ms | 23.4 ms | 1.01× |
-| Linalg::solve 500² | 6.6 ms | 11.1 ms | **0.60×** |
-| fromArray 1000² | 21.7 ms | 59.6 ms | **0.36×** |
-| toArray 1000² | 20.4 ms | 59.6 ms | **0.34×** |
-| slice view | 0.3 µs | 0.5 µs | 0.63× |
-| elementwise add 5000² | 415.8 ms | 157.6 ms | 2.64× |
-| elementwise mul 5000² | 413.9 ms | 164.7 ms | 2.51× |
-| sum axis=1 5000² | 74.7 ms | 19.6 ms | 3.81× |
-| sum axis=0 5000² | 314.8 ms | 20.3 ms | 15.48× |
+| elementwise add 5000² | 2.64× | **1.01×** | parity |
+| elementwise mul 5000² | 2.51× | **1.05×** | parity |
+| sum axis=0 5000² | 15.48× | **4.40×** | 3.5× faster |
+| sum axis=1 5000² | 3.81× | 4.28× | unchanged within noise |
+| matmul 1024² f64 | 1.02× | 0.96× | parity |
+| matmul 1024² f32 | 1.00× | 1.00× | parity |
+| Linalg::solve 500² | 0.60× | 0.63× | faster than NumPy |
+| Linalg::inv 500² | 1.01× | 1.12× | parity |
+| fromArray 1000² | 0.36× | 0.38× | faster than NumPy |
+| toArray 1000² | 0.34× | 0.34× | faster than NumPy |
+| slice (view) | sub-µs | sub-µs | parity |
 
-The thesis is validated where it matters: matmul + linalg are at
-parity (both call OpenBLAS / LAPACK), and the interop layer is
-*faster* than NumPy. Where we lose is in pure element-wise
-inner-loop territory NumPy has spent decades vectorising. Axis-0
-sum is the worst case (cache-unfriendly, no per-axis kernel yet) —
-candidate for a future optimisation sprint when someone has the
-itch.
+**Effect on the project's thesis:** numphp is now within 5% of
+NumPy on common element-wise ops, faster than NumPy on the interop
+boundary, at parity on the heavy BLAS/LAPACK lifting, and within
+~4× on axis reductions. The remaining ~4× gap is no longer
+cache-bound — closing it requires SIMD intrinsics (deferred).
 
-## Next pickup — three viable choices
+## Next pickup — extra functions and datatypes
 
-### Option A: Stop on this milestone
+User direction at the end of sprint 16: "after that, we will focus
+on some of the extra functions and datatypes."
 
-Story 13 fully shipped, version 0.0.13, build clean, real numbers
-published. This is a natural pause. Anything beyond is reception
-work or follow-on optimisation. Pause here, return when motivated.
+Candidates worth thinking about (not yet shaped — pick what makes
+sense when starting):
 
-### Option B: Story 14 (community + outreach)
+### Datatypes
+- **`bool`** — arrays of true/false. Currently absent from the dtype
+  list. Would unlock proper boolean-result comparisons (`$a > $b`),
+  boolean indexing later, and a "where" function. Decision 2 in
+  `system.md` deliberately deferred bool to v1.
+- **`complex64` / `complex128`** — pairs of f32/f64 packed as
+  `(real, imag)`. Unlocks FFT, eigendecomposition with complex
+  results (currently `eig` throws on complex eigenvalues, decision
+  15), full SVD interpretation. Heavier lift — needs new BLAS/
+  LAPACK code paths (`zgemm`, `zheev`, etc.).
+- **`float16`** — half precision. ML-relevant. Probably lowest
+  priority unless there's specific demand.
 
-Now there's actually something to share — examples, docs, a real
-benchmark table. Story 14 is the announcement and outreach work
-(PHP internals mailing list, Reddit, NumPy/SciPy community
-notice). Substantively it's nontechnical. The benchmark post would
-be the centerpiece.
+### Functions
+- **Comparison ops** (`==`, `!=`, `<`, `>`, `<=`, `>=`) returning
+  boolean arrays — depends on bool dtype.
+- **`where`** — three-argument NDArray::where(cond, x, y). Depends
+  on bool.
+- **`cumsum` / `cumprod`** — cumulative reductions. Useful for
+  time-series and probability work.
+- **`median` / `percentile` / `quantile`** — already deferred per
+  Story 9 outcome. Implementation needs a sort-and-pick or
+  partition-based quickselect.
+- **`unique`** — pulls unique values from a 1-D array.
+- **`pad`** — fixed-value or edge padding.
+- **`take` / `take_along_axis`** — indexed gather along an axis.
+  Depends on integer-array indexing (boolean/fancy indexing was
+  deferred per system.md).
+- **`fft` / `ifft`** — Fourier transforms. Heavy lift; depends on
+  complex dtype. Could ship a real-input (`rfft`) variant first.
 
-### Option C: Optimisation sprint targeted at the weak spots
+My read: **bool dtype + comparison ops + `where`** is one cohesive
+sprint that unlocks several follow-ups. `cumsum`/`cumprod` is a
+small standalone sprint. The complex dtype work is bigger and more
+speculative — defer until something concrete (e.g. someone wants
+to do FFT in PHP) surfaces.
 
-- **Element-wise vectorisation** — replace the generic nd-iterator
-  inner loop with a SIMD path for contiguous f64 arrays. ~2.5×
-  improvement plausible.
-- **Per-axis sum kernel** — non-stride-1 axis-0 reduction is 15×
-  slower than NumPy. A targeted strided-load kernel could close
-  most of the gap.
+### How to start the next session
 
-### Recommendation
-
-Option A or Option B. Option C is real engineering work for a
-specific weak spot the project may not need to address before
-external use surfaces real-world demand. Don't pre-optimise.
-
-If picking B: `/agile:shape 14-community-and-outreach`. If picking
-A: just commit and rest.
-
-**Story 12 (PECL packaging) is deliberately parked** — user
-declined to schedule it after we discussed the manifest-maintenance
-overhead. Revisit when there's concrete demand for `pecl install
-numphp`.
+Tell me which slice of "extra functions and datatypes" to shape and
+I'll write a user story + sprint plan in the main thread (no
+subagent).
 
 ## Working state of the build
 
-- Source files unchanged this sprint — pure additive sprint.
-- New top-level directory: `bench/` (with `bench/.venv/` gitignored).
-- `PHP_NUMPHP_VERSION` = `0.0.13`.
-- 30 architectural decisions captured in `docs/system.md`.
+- Source files changed this sprint: `src/ndarray.c` (element-wise
+  fast path), `src/ops.c` (axis-0 kernel + helpers), `src/numphp.h`
+  (version).
+- 30 architectural decisions in `docs/system.md`; sprint 16 didn't
+  add a new decision (internal optimisation, not architecture).
+- `bench/.venv/` contains numpy 2.4.4. Already gitignored.
 
-## Known minor follow-ups (not blocking, deferred from earlier sprints)
+## Known minor follow-ups (not blocking)
 
-- True buffer-mutating in-place methods (`$a->addInplace($b)` etc.) deferred.
-- Multi-axis `slice` deferred; users chain `slice()` after `transpose()`.
+- True buffer-mutating in-place methods deferred.
+- Multi-axis `slice` deferred; chain `slice()` after `transpose()`.
 - Negative `slice` step deferred.
 - Boolean / fancy indexing not in v1.
-- Strided BLAS (passing `lda` for transposed views instead of copying) deferred.
+- Strided BLAS deferred.
 - 3D+ batched matmul deferred.
 - Native int matmul deferred (currently promotes to f64).
-- gcov gate still `continue-on-error: true`; flip when v0.1.0 release prep starts.
-- BufferView `writeable=false` is advisory in v1 (does not actually clear
-  `WRITEABLE` on the source NDArray).
-- Story 11 Phase C (Arrow IPC): vendoring nanoarrow is the standing
-  recommendation when revisiting; user had not committed.
-- Element-wise SIMD path and per-axis sum kernel — surfaced by the
-  benchmark, candidate for a future targeted optimisation sprint.
+- gcov gate still `continue-on-error: true`; flip when v0.1.0
+  release prep starts.
+- BufferView `writeable=false` is advisory in v1.
+- Story 11 Phase C (Arrow IPC) — vendor nanoarrow when revisiting.
+- **Sum axis=1 fast path** — would close the ~4× gap; not
+  cache-bound so requires SIMD or a different inner-loop shape;
+  candidate when there's demand.
+- **SIMD intrinsics** for the existing fast paths — closes the last
+  ~5% on element-wise and most of the ~4× on axis-0 sum. Portable
+  via `<immintrin.h>` for x86 + a NEON path for ARM. Real engineering;
+  defer.
 
 ## Where to read the system
 
-- `docs/system.md` — the keeper. 30 decisions + per-sprint outcomes.
-  Read first.
+- `docs/system.md` — decisions + per-sprint outcomes.
 - `docs/status.md` — sprint table.
-- `docs/api/` — complete API reference.
-- `docs/concepts/` — five concept guides.
-- `docs/getting-started.md` — onboarding.
-- `docs/cheatsheet-numpy.md` — NumPy ↔ NumPHP cheat sheet.
-- `docs/coverage-audit-2026-05-01.md` — the audit that drove sprint 13b.
-- `docs/benchmarks.md` — first benchmark run, hardware-tagged.
-- `examples/` — runnable scripts demonstrating real workflows.
-- `bench/` — benchmark suite. Re-run with `bash bench/run.sh`.
-- `src/` — C source (~7 .c, 7 .h, plus `lapack_names.h`).
-- `docs/user-stories/done/` — shipped stories.
-  `docs/user-stories/backlog/` — remaining (11 with C deferred, 12, 14).
-- `CHANGELOG.md` — `0.0.1` through `0.0.13`.
+- `docs/api/`, `docs/concepts/`, `docs/getting-started.md`,
+  `docs/cheatsheet-numpy.md` — user-facing.
+- `docs/benchmarks.md` — current numbers (refreshed sprint 16).
+- `examples/`, `bench/`, `src/`, `tests/` — code.
+- `CHANGELOG.md` — `0.0.1` through `0.0.14`.
 
 ## How to resume
 
 ```bash
 cd /home/arciitek/git/numphp
-phpize && ./configure && make CFLAGS="-Wall -Wextra -O2 -g"   # clean build
-NO_INTERACTION=true make test                                   # 61/61 + 1 skipped (FFI)
-bash bench/run.sh                                               # numphp vs NumPy
+phpize && ./configure && make CFLAGS="-Wall -Wextra -O2 -g"
+NO_INTERACTION=true make test                       # 61/61 + 1 skipped
+bash bench/run.sh                                   # numphp vs NumPy
 ```
 
 ## Outstanding ops
 
-- **No remote configured.** Local commits only.
+- No remote configured. Local commits only.
 
 ## Known dev-env caveats
 
-- `sudo apt-get install` requires manual user input — Claude can't
-  elevate. Toolchain (`php8.4-dev`, `libopenblas-dev`,
-  `liblapack-dev`, `gcovr`) already installed. `valgrind` not
-  installed locally; CI runs the valgrind lane in GitHub Actions.
-- System Python is PEP 668-managed (no `pip install --user` without
-  a venv). Benchmark sprint solved this by putting NumPy in
-  `bench/.venv/` — gitignored, isolated from the system.
+- `sudo apt-get install` requires manual user input. Toolchain
+  already installed locally.
+- System Python is PEP 668-managed; NumPy lives in `bench/.venv/`.
 - `make test` interactive prompt: always run with
-  `NO_INTERACTION=true` so no `php_test_results_*.txt` reports get
-  auto-saved.
+  `NO_INTERACTION=true`.

@@ -1029,6 +1029,109 @@ static int do_binary_op_core(zend_uchar opcode, zval *result, zval *op1, zval *o
     numphp_dtype out_dt = numphp_promote_dtype(a->dtype, b->dtype);
     numphp_ndarray *out = numphp_ndarray_alloc_owner(out_dt, out_ndim, out_shape);
 
+    int ok = 1;
+
+    /* Fast path: both inputs C-contiguous, same dtype as output, identical
+     * shape (no broadcasting). Skips the iterator + per-element function-call
+     * dtype dispatch so the compiler can auto-vectorise the typed-pointer
+     * loops. Mixed-dtype, broadcasting, and non-contig sources fall through
+     * to the slow nditer path below. */
+    int fast_ok =
+        (a->flags & NUMPHP_C_CONTIGUOUS)
+     && (b->flags & NUMPHP_C_CONTIGUOUS)
+     && a->dtype == out_dt
+     && b->dtype == out_dt
+     && a->ndim == out_ndim
+     && b->ndim == out_ndim;
+    if (fast_ok) {
+        for (int d = 0; d < out_ndim; d++) {
+            if (a->shape[d] != out_shape[d] || b->shape[d] != out_shape[d]) {
+                fast_ok = 0;
+                break;
+            }
+        }
+    }
+
+    if (fast_ok) {
+        zend_long n = out->size;
+        switch (out_dt) {
+            case NUMPHP_FLOAT64: {
+                const double * __restrict__ ap = (const double *)a->buffer->data;
+                const double * __restrict__ bp = (const double *)b->buffer->data;
+                double       * __restrict__ cp = (double *)out->buffer->data;
+                switch (op) {
+                    case OP_ADD: for (zend_long i = 0; i < n; i++) cp[i] = ap[i] + bp[i]; break;
+                    case OP_SUB: for (zend_long i = 0; i < n; i++) cp[i] = ap[i] - bp[i]; break;
+                    case OP_MUL: for (zend_long i = 0; i < n; i++) cp[i] = ap[i] * bp[i]; break;
+                    case OP_DIV: for (zend_long i = 0; i < n; i++) cp[i] = ap[i] / bp[i]; break;
+                }
+                break;
+            }
+            case NUMPHP_FLOAT32: {
+                const float * __restrict__ ap = (const float *)a->buffer->data;
+                const float * __restrict__ bp = (const float *)b->buffer->data;
+                float       * __restrict__ cp = (float *)out->buffer->data;
+                switch (op) {
+                    case OP_ADD: for (zend_long i = 0; i < n; i++) cp[i] = ap[i] + bp[i]; break;
+                    case OP_SUB: for (zend_long i = 0; i < n; i++) cp[i] = ap[i] - bp[i]; break;
+                    case OP_MUL: for (zend_long i = 0; i < n; i++) cp[i] = ap[i] * bp[i]; break;
+                    case OP_DIV: for (zend_long i = 0; i < n; i++) cp[i] = ap[i] / bp[i]; break;
+                }
+                break;
+            }
+            case NUMPHP_INT64: {
+                const int64_t * __restrict__ ap = (const int64_t *)a->buffer->data;
+                const int64_t * __restrict__ bp = (const int64_t *)b->buffer->data;
+                int64_t       * __restrict__ cp = (int64_t *)out->buffer->data;
+                if (op == OP_DIV) {
+                    for (zend_long i = 0; i < n; i++) {
+                        if (bp[i] == 0) {
+                            zend_throw_exception(zend_ce_division_by_zero_error, "Division by zero", 0);
+                            ok = 0; break;
+                        }
+                        cp[i] = ap[i] / bp[i];
+                    }
+                } else {
+                    switch (op) {
+                        case OP_ADD: for (zend_long i = 0; i < n; i++) cp[i] = ap[i] + bp[i]; break;
+                        case OP_SUB: for (zend_long i = 0; i < n; i++) cp[i] = ap[i] - bp[i]; break;
+                        case OP_MUL: for (zend_long i = 0; i < n; i++) cp[i] = ap[i] * bp[i]; break;
+                        default: break;
+                    }
+                }
+                break;
+            }
+            case NUMPHP_INT32: {
+                const int32_t * __restrict__ ap = (const int32_t *)a->buffer->data;
+                const int32_t * __restrict__ bp = (const int32_t *)b->buffer->data;
+                int32_t       * __restrict__ cp = (int32_t *)out->buffer->data;
+                if (op == OP_DIV) {
+                    for (zend_long i = 0; i < n; i++) {
+                        if (bp[i] == 0) {
+                            zend_throw_exception(zend_ce_division_by_zero_error, "Division by zero", 0);
+                            ok = 0; break;
+                        }
+                        cp[i] = ap[i] / bp[i];
+                    }
+                } else {
+                    switch (op) {
+                        case OP_ADD: for (zend_long i = 0; i < n; i++) cp[i] = ap[i] + bp[i]; break;
+                        case OP_SUB: for (zend_long i = 0; i < n; i++) cp[i] = ap[i] - bp[i]; break;
+                        case OP_MUL: for (zend_long i = 0; i < n; i++) cp[i] = ap[i] * bp[i]; break;
+                        default: break;
+                    }
+                }
+                break;
+            }
+        }
+
+        if (free_a) numphp_ndarray_free(a);
+        if (free_b) numphp_ndarray_free(b);
+        if (!ok) { numphp_ndarray_free(out); return FAILURE; }
+        numphp_zval_wrap_ndarray(result, out);
+        return SUCCESS;
+    }
+
     numphp_nditer it;
     if (!numphp_nditer_init(&it, 2, ops, out)) {
         numphp_ndarray_free(out);
@@ -1037,7 +1140,6 @@ static int do_binary_op_core(zend_uchar opcode, zval *result, zval *op1, zval *o
         return FAILURE;
     }
 
-    int ok = 1;
     if (it.size > 0) do {
         switch (out_dt) {
             case NUMPHP_FLOAT64: {

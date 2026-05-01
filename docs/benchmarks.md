@@ -8,7 +8,7 @@ like a permanent record._
 
 ```json
 {
-  "captured_at": "2026-05-01T11:26:20Z",
+  "captured_at": "2026-05-01T12:15:05Z",
   "host": {
     "kernel": "Linux 6.8.0-94-generic x86_64",
     "distro": "Ubuntu 24.04.4 LTS",
@@ -18,7 +18,7 @@ like a permanent record._
     "mem_total": "8022420 kB"
   },
   "numphp": {
-    "version": "0.0.12",
+    "version": "0.0.13",
     "linked_blas_lapack": "liblapack.so.3 -> /lib/x86_64-linux-gnu/liblapack.so.3;libopenblas.so.0 -> /lib/x86_64-linux-gnu/libopenblas.so.0;",
     "php_version": "8.4.20"
   },
@@ -30,17 +30,17 @@ like a permanent record._
 
 | Scenario | Shape | dtype | numphp (ms) | NumPy (ms) | ratio (numphp / numpy) |
 |----------|-------|-------|-------------|------------|-----------------------|
-| elementwise add | 5000x5000 | float64 | 415.831 | 157.582 | 2.64× |
-| elementwise multiply | 5000x5000 | float64 | 413.863 | 164.720 | 2.51× |
-| matmul | 1024x1024 | float64 | 73.588 | 72.413 | 1.02× |
-| sum axis=0 | 5000x5000 | float64 | 314.847 | 20.343 | 15.48× |
-| sum axis=1 | 5000x5000 | float64 | 74.723 | 19.634 | 3.81× |
-| fromArray | 1000x1000 | float64 | 21.734 | 59.550 | 0.36× |
-| toArray | 1000x1000 | float64 | 20.367 | 59.617 | 0.34× |
-| Linalg::solve | 500x500 | float64 | 6.649 | 11.143 | 0.60× |
-| Linalg::inv | 500x500 | float64 | 23.744 | 23.442 | 1.01× |
-| slice (view creation) | 5000x5000 | float64 | 0.3 µs | 0.5 µs | 0.63× |
-| matmul f32 | 1024x1024 | float32 | 37.380 | 37.478 | 1.00× |
+| elementwise add | 5000x5000 | float64 | 164.477 | 162.065 | 1.01× |
+| elementwise multiply | 5000x5000 | float64 | 172.886 | 165.093 | 1.05× |
+| matmul | 1024x1024 | float64 | 70.641 | 73.788 | 0.96× |
+| sum axis=0 | 5000x5000 | float64 | 91.031 | 20.692 | 4.40× |
+| sum axis=1 | 5000x5000 | float64 | 80.206 | 18.758 | 4.28× |
+| fromArray | 1000x1000 | float64 | 21.930 | 58.130 | 0.38× |
+| toArray | 1000x1000 | float64 | 20.152 | 58.876 | 0.34× |
+| Linalg::solve | 500x500 | float64 | 7.025 | 11.150 | 0.63× |
+| Linalg::inv | 500x500 | float64 | 25.650 | 22.997 | 1.12× |
+| slice (view creation) | 5000x5000 | float64 | 0.5 µs | 0.5 µs | 1.01× |
+| matmul f32 | 1024x1024 | float32 | 35.815 | 35.854 | 1.00× |
 
 ## How to read this
 

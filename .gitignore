@@ -41,6 +41,9 @@ coverage/
 # Benchmark venv (Python NumPy lives here, not on the system)
 bench/.venv/
 
+# Per-run benchmark scratch — regenerated every `bash bench/run.sh`
+bench/last-run/
+
 # Test artifacts
 tests/*.diff
 tests/*.exp

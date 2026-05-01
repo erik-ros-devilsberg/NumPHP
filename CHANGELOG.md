@@ -7,6 +7,22 @@ and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.
 
 ## [Unreleased]
 
+## [0.0.14] — 2026-05-01
+
+### Performance — Story 16: fastpath optimisations
+Two kernel additions targeting the weak spots the 0.0.13 benchmark surfaced. No API change, no SIMD intrinsics — just predicate + flat typed-pointer loops the compiler vectorises.
+
+- **Element-wise add/sub/mul/div fast path** in `do_binary_op_core`. When both inputs and the output are C-contiguous and same dtype with identical shape (no broadcasting), skip the iterator and the per-element `numphp_read_*` function-call dispatch. The flat typed-pointer loop auto-vectorises at `-O2`. Mixed-dtype, broadcasting, and non-contiguous sources still go through the original iterator path. Result: **add 2.64× → 1.01×, mul 2.51× → 1.05×** vs NumPy.
+
+- **Axis-0 sum tiled kernel** in `numphp_reduce`. When source is 2-D C-contiguous f32/f64, axis=0, no NaN-skip: process columns in strips of 32, run pairwise recursion on rows that keeps 32 accumulators in lockstep so a single row read at the leaf serves 32 columns. Each column's pairwise recursion structure is preserved, so output is bit-identical to the slow path. Result: **sum axis=0 15.48× → 4.40×** — closer to 4× target than the >6× sprint-failure threshold.
+
+- All 61 phpt tests still pass (bit-identical output verified by tests `032-`, `038-`, `058-`). All 5 examples still match `.expected`. Doc snippet harness still green.
+- `docs/benchmarks.md` refreshed with the post-optimisation numbers.
+- Bumped `PHP_NUMPHP_VERSION` to `0.0.14`.
+
+### Notes — what's next
+The remaining gaps (sum axis=1 ~4×, sum axis=0 ~4×) are no longer dominated by cache misses or function-call overhead. Closing them further would mean SIMD intrinsics (out-of-scope per the sprint's no-intrinsics rule). The user-facing thesis ("PHP can do data work that's currently Python-default") is stronger after this sprint: matmul + linalg parity, interop *faster* than NumPy, element-wise within 5%, and axis-reductions within ~4×.
+
 ## [0.0.13] — 2026-05-01
 
 ### Added — Story 13 Phase C: benchmarks

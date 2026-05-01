@@ -84,6 +84,109 @@ static double pairwise_sum_f64_skipnan(const char *p, zend_long stride, zend_lon
 }
 
 /* ----------------------------------------------------------------------------
+ * Axis-0 sum tiled kernel — 2-D C-contiguous f32/f64 only.
+ *
+ * Strategy: process columns in strips of NUMPHP_AXIS0_TILE. For each strip
+ * we run a pairwise recursion on rows that keeps `strip_w` accumulators in
+ * lockstep, so a single row read at the leaf serves `strip_w` columns.
+ * The recursion structure on rows is identical to the slow path's
+ * pairwise_sum_f64, so each output cell is bit-identical to the
+ * pre-optimisation value.
+ *
+ * Speedup vs the slow path comes from:
+ *   - Reads at the leaf hit consecutive cache lines (contiguous along
+ *     stride-1) instead of one cache miss per row (40 KB stride for a
+ *     5000-wide f64 array).
+ *   - No per-element function-call dispatch; the dtype is known.
+ *   - Compiler is free to vectorise the leaf's inner per-strip loop.
+ * -------------------------------------------------------------------------- */
+
+#define NUMPHP_AXIS0_TILE 32
+
+static void pairwise_sum_strip_f64(const double * __restrict__ src, zend_long nrows,
+                                   zend_long row_stride_doubles,
+                                   int strip_w, double * __restrict__ acc)
+{
+    if (nrows <= 8) {
+        if (strip_w == NUMPHP_AXIS0_TILE) {
+            /* Hot path: full-tile leaf. Fixed strip_w lets the compiler
+             * unroll and vectorise the inner add. */
+            for (zend_long r = 0; r < nrows; r++) {
+                const double * __restrict__ row = src + r * row_stride_doubles;
+                for (int w = 0; w < NUMPHP_AXIS0_TILE; w++) acc[w] += row[w];
+            }
+        } else {
+            for (zend_long r = 0; r < nrows; r++) {
+                const double * __restrict__ row = src + r * row_stride_doubles;
+                for (int w = 0; w < strip_w; w++) acc[w] += row[w];
+            }
+        }
+        return;
+    }
+    zend_long m = nrows / 2;
+    double tmp[NUMPHP_AXIS0_TILE] = {0};
+    pairwise_sum_strip_f64(src, m, row_stride_doubles, strip_w, tmp);
+    pairwise_sum_strip_f64(src + m * row_stride_doubles, nrows - m,
+                           row_stride_doubles, strip_w, acc);
+    for (int w = 0; w < strip_w; w++) acc[w] += tmp[w];
+}
+
+static void axis0_sum_f64_2d(const double *src, zend_long nrows, zend_long ncols,
+                             double *out)
+{
+    memset(out, 0, (size_t)ncols * sizeof(double));
+    for (zend_long c0 = 0; c0 < ncols; c0 += NUMPHP_AXIS0_TILE) {
+        int w = (int)((ncols - c0 < NUMPHP_AXIS0_TILE)
+                       ? (ncols - c0)
+                       : NUMPHP_AXIS0_TILE);
+        pairwise_sum_strip_f64(src + c0, nrows, ncols, w, out + c0);
+    }
+}
+
+/* f32 variant: accumulate in f64 to match the slow path's precision contract
+ * (pairwise_sum_f64 always reads-and-promotes-to-double internally), then
+ * cast to f32 on write. */
+static void pairwise_sum_strip_f32_to_f64(const float * __restrict__ src, zend_long nrows,
+                                          zend_long row_stride_floats,
+                                          int strip_w, double * __restrict__ acc)
+{
+    if (nrows <= 8) {
+        if (strip_w == NUMPHP_AXIS0_TILE) {
+            for (zend_long r = 0; r < nrows; r++) {
+                const float * __restrict__ row = src + r * row_stride_floats;
+                for (int w = 0; w < NUMPHP_AXIS0_TILE; w++) acc[w] += (double)row[w];
+            }
+        } else {
+            for (zend_long r = 0; r < nrows; r++) {
+                const float * __restrict__ row = src + r * row_stride_floats;
+                for (int w = 0; w < strip_w; w++) acc[w] += (double)row[w];
+            }
+        }
+        return;
+    }
+    zend_long m = nrows / 2;
+    double tmp[NUMPHP_AXIS0_TILE] = {0};
+    pairwise_sum_strip_f32_to_f64(src, m, row_stride_floats, strip_w, tmp);
+    pairwise_sum_strip_f32_to_f64(src + m * row_stride_floats, nrows - m,
+                                  row_stride_floats, strip_w, acc);
+    for (int w = 0; w < strip_w; w++) acc[w] += tmp[w];
+}
+
+static void axis0_sum_f32_2d(const float *src, zend_long nrows, zend_long ncols,
+                             float *out)
+{
+    double *acc = (double *)ecalloc((size_t)ncols, sizeof(double));
+    for (zend_long c0 = 0; c0 < ncols; c0 += NUMPHP_AXIS0_TILE) {
+        int w = (int)((ncols - c0 < NUMPHP_AXIS0_TILE)
+                       ? (ncols - c0)
+                       : NUMPHP_AXIS0_TILE);
+        pairwise_sum_strip_f32_to_f64(src + c0, nrows, ncols, w, acc + c0);
+    }
+    for (zend_long c = 0; c < ncols; c++) out[c] = (float)acc[c];
+    efree(acc);
+}
+
+/* ----------------------------------------------------------------------------
  * Welford's online algorithm — single pass, numerically stable variance.
  *
  *   M2 = 0, mean = 0, n = 0
@@ -426,6 +529,26 @@ numphp_ndarray *numphp_reduce(numphp_ndarray *src, numphp_reduce_op op,
             char *o = out_base + n * out_itemsize;
             if (op == NUMPHP_REDUCE_SUM) numphp_write_scalar_at(o, out_dt, 0.0, 0);
             else                          numphp_write_scalar_at(o, out_dt, NAN, 0);
+        }
+        if (owns_contig) numphp_ndarray_free(contig);
+        return out;
+    }
+
+    /* Fast path: 2-D C-contiguous f32/f64 source, axis-0 SUM, no NaN-skip.
+     * Tiled column kernel — see axis0_sum_*_2d above. Bit-identical to the
+     * slow path because per-column pairwise recursion is preserved. */
+    if (op == NUMPHP_REDUCE_SUM && !skip_nan
+        && in_ndim == 2 && red == 0
+        && (src->dtype == NUMPHP_FLOAT64 || src->dtype == NUMPHP_FLOAT32)
+        && out_dt == src->dtype) {
+        zend_long nrows = src->shape[0];
+        zend_long ncols = src->shape[1];
+        if (src->dtype == NUMPHP_FLOAT64) {
+            axis0_sum_f64_2d((const double *)src_base, nrows, ncols,
+                             (double *)out_base);
+        } else {
+            axis0_sum_f32_2d((const float *)src_base, nrows, ncols,
+                             (float *)out_base);
         }
         if (owns_contig) numphp_ndarray_free(contig);
         return out;
