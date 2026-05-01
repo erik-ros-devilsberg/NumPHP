@@ -1,18 +1,16 @@
-# Resume Notes — 2026-05-01 (after sprint 13b)
+# Resume Notes — 2026-05-01 (after sprint 15)
 
 Pick up where this left off next session.
 
 ## Where we are
 
-**Version 0.0.11.** Pre-release, iterative. Building toward 0.1.0, not 1.0.
-The eventual 1.0 lives at the end of the project — battle-tested by external
-parties — not at the end of this near-term scope.
+**Version 0.0.12.** Pre-release, iterative. Building toward 0.1.0.
+The eventual 1.0 lives at the end of the project — battle-tested by
+external parties — not at the end of this near-term scope.
 
-**12 sprints shipped.** Build green at `-Wall -Wextra`; 60/60 phpt + 1
-cleanly skipped (FFI ext absent) + 1 doc-snippet-harness test that runs 75
-fenced code blocks from user-facing docs on every PR. Just landed: Story 13
-Phase B (examples + snippet harness + gap-closure tests + a real segfault
-fix in `fromArray`).
+**13 sprints shipped.** Build green at `-Wall -Wextra`; 60/60 phpt + 1
+cleanly skipped (FFI ext absent) + the doc-snippet harness running 75
+fenced ```php blocks on every PR.
 
 | # | Sprint | Stories | Status | Version |
 |---|--------|---------|--------|---------|
@@ -28,6 +26,7 @@ fix in `fromArray`).
 | 10 | buffer-view (Story 11 Phase B) | 11B | ✓ | 0.0.10 |
 | 11 | documentation-pass (Story 13 Phase A) | 13A | ✓ | (no bump — pure docs) |
 | 12 | 13b-examples-and-tests (Story 13 Phase B) | 13B | ✓ | 0.0.11 |
+| 13 | 15-project-layout (Story 15) | 15 | ✓ | 0.0.12 |
 
 **Remaining for v0.1.0 release-quality push:** Story 12 (PECL packaging),
 Story 13 Phase C (benchmarks), gcov gate flip to blocking. None are
@@ -35,86 +34,74 @@ required before then.
 
 **Post-1.0:** Story 11 Phase C (Arrow IPC), Story 14 (community + outreach).
 
-## What just landed (sprint 13b)
+## What just landed (sprint 15)
 
-- `examples/` with 5 runnable scripts: `linear-regression.php`, `kmeans.php`,
-  `image-as-array.php`, `time-series.php`, `csv-pipeline.php`. Each has a
-  `.expected` file. New CI job diffs them on every PR.
-- `tests/100-doc-snippets.phpt` + `tests/_helpers/snippet_runner.php` — every
-  fenced ```php block in user-facing docs runs on every PR, output checked
-  against the matching ``` block. 75 snippets covered.
-- 6 new phpt tests (`055-…` through `060-…`) closing audit gaps.
-- **Real bug fixed:** `NDArray::fromArray([[1, [99]]])` (mixed scalar/array
-  siblings) used to segfault. Now throws `\ShapeException` cleanly. Found
-  during the audit; regression-locked by `tests/060-`.
-- gcov filter widened from `ndarray.c + ops.c` only to all 7 C sources in
-  `config.m4`. Gate stays non-blocking for now.
-- `scripts/coverage.sh` — local-and-CI-parity coverage runner that cleans
-  up after itself.
-- `docs/coverage-audit-2026-05-01.md` — written audit (covered /
-  newly-covered / deferred sections).
-- Doc fix in `docs/api/ndarray.md`: `full()` and `fromArray()` throws-lists
-  corrected (the previous claims about `\DTypeException` for non-numeric
-  values were wrong — silent PHP cast in both cases, matching NumPy on
-  NaN→int).
-- `PHP_NUMPHP_VERSION` bumped to `0.0.11`. `CHANGELOG.md` entry added.
+Mechanical layout sprint, no behavioural change.
 
-## Mid-sprint course correction (recorded so the lesson sticks)
+- 15 tracked C/H files moved from the project root to `src/` via
+  `git mv` (so `git blame` follows). Files: `numphp.{c,h}`,
+  `ndarray.{c,h}`, `ops.{c,h}`, `linalg.{c,h}`, `io.{c,h}`,
+  `bufferview.{c,h}`, `nditer.{c,h}`, `lapack_names.h`.
+- `config.m4` updated: `PHP_NEW_EXTENSION` lists `src/foo.c` paths;
+  `PHP_ADD_INCLUDE([$ext_srcdir/src])` added so cross-file
+  `#include "numphp.h"` keeps resolving.
+- `LICENSE` added at root — **BSD 3-Clause**, matching NumPy / SciPy /
+  pandas / scikit-learn. README's license section updated to point at
+  it (was previously a "TBD" placeholder).
+- Decisions **28** (sources under `src/`) and **29** (BSD 3-Clause)
+  locked in `docs/system.md`.
+- Version bumped to **0.0.12**.
 
-Sprint 13b drifted toward release-engineering polish (blocking coverage
-gate at 80%, the `floor(actual/5)*5 - 5` threshold rule, ratifying tooling
-choices as architectural decisions, an artifact-upload step). User pulled
-me back twice: first to flag the drift, then to point out we're at ~0.0.15,
-not v1.0 — release-quality CI gates belong at release time, not now.
-Re-narrowed: keep Phase B about exercising the API and protecting the docs;
-leave gate-flipping for the release-quality sprint that follows Story 12.
+**Effect on root:** ~20 tracked files → ~6. The root now holds only
+meta files a newcomer reads first: `README.md`, `CHANGELOG.md`,
+`LICENSE`, `CLAUDE.md`, `.gitignore`, `config.m4`.
 
-The drift is recorded as a project-memory note so future sessions don't
-repeat it.
+**One factual correction during execution:** I'd recommended MIT
+matching what I assumed NumPy used. NumPy is actually BSD 3-Clause
+(so are SciPy, pandas, scikit-learn). Switched to BSD 3-Clause to
+match user intent ("mit is used by numpy too right?").
 
-## Next pickup — two viable choices
+## Next pickup — Story 12 (PECL packaging)
 
-**Option A: Story 12 (PECL packaging).** PECL packaging changes nothing
-about user behaviour — purely a distribution format. Unblocks anyone who
-wants to `pecl install numphp` (which is the primary "PHP can do data
-work" demonstration, since it removes a build barrier). Doesn't require
-any prior work to be polished beyond what we have. Probably 1 sprint.
+Now naturally next. The `src/` layout from this sprint is
+`package.xml`-ready (PECL accepts paths). Story 12 unblocks anyone
+who wants to `pecl install numphp` — which is the primary "PHP can do
+data work" demonstration, since it removes a build barrier.
 
-**Option B: Story 13 Phase C (benchmarks).** Numbers vs NumPy. Highest
-leverage for the project's core thesis — "PHP can do this, here's the
-proof in milliseconds." But also the loudest artifact, so getting the
-methodology right (warm-up runs, hardware fingerprint, BLAS variant,
-median + IQR, reproducible script) matters. Probably 1 sprint.
+What Story 12 needs (best-effort outline; shape it properly when you
+start):
 
-**Recommendation: Story 12 first, then 13C.** Reasoning: PECL packaging
-freezes the build/install ergonomics, which is what someone running
-benchmarks first does anyway. Doing 13C before 12 means the benchmark
-post would have to either (a) rebuild from source for every reader, or
-(b) document a packaging story that doesn't exist yet. Neither is great.
+1. `package.xml` v2 schema describing every shipped file (sources,
+   tests, examples, docs, README, CHANGELOG, LICENSE).
+2. `pecl package` produces a `.tgz` that installs cleanly via
+   `pecl install ./numphp-0.0.12.tgz`.
+3. CI step that does the package + install dry run on every PR.
+4. PECL channel registration is a separate manual step — out of
+   scope; the goal is a packageable artifact.
 
 ### How to start the next session
 
 1. Read `docs/user-stories/backlog/12-pecl-packaging.md`.
-2. `/agile:shape 12-pecl-packaging` (in main thread, per memory note —
-   no subagent for shaping).
+2. `/agile:shape 12-pecl-packaging` — in main thread, per memory note,
+   no subagent.
 3. Human-gate the plan, then `/agile:execute`.
 
-If you'd rather do 13C first: `/agile:shape 13-docs-and-benchmarks` and
-scope to **Phase C only**.
+Alternative pickup: **Story 13 Phase C (benchmarks).** Reasoning for
+doing 12 first: PECL packaging freezes install ergonomics, which a
+benchmark reader expects to exist. Reasoning for doing 13C first:
+benchmark numbers are the most direct artifact of the project's
+thesis ("PHP can do this in milliseconds"). Either is defensible; my
+recommendation stays Story 12 first.
 
 ## Working state of the build
 
-- Source files changed this sprint: `ndarray.c` (one targeted fix in
-  `fromarray_walk` — added `rank_locked` flag).
-- New files: `examples/**` (with `.expected` siblings), `tests/_helpers/
-  snippet_runner.php`, `tests/100-doc-snippets.phpt`, `tests/055-…` through
-  `tests/060-…`, `scripts/coverage.sh`, `docs/coverage-audit-2026-05-01.md`.
-- Modified configuration: `.github/workflows/ci.yml` (added `examples`
-  job, widened gcov filter, added workflow-level `NO_INTERACTION: true`).
-- 29 architectural decisions captured in `docs/system.md` (decisions 28-29
-  *not* added — that was deliberate scope correction; the coverage
-  threshold and snippet-test convention are tooling choices, not
-  architecture).
+- Sources now live under `src/`. 15 tracked source files.
+- `config.m4` references `src/*.c` paths.
+- CI yaml unchanged from sprint 13b — no path updates needed because
+  build commands operate from the project root.
+- `scripts/coverage.sh` unchanged — gcovr's `--filter 'numphp\.c$'`
+  patterns still match (basename, not absolute path).
+- 29 architectural decisions captured in `docs/system.md`.
 
 ## Known minor follow-ups (not blocking, deferred from earlier sprints)
 
@@ -133,7 +120,7 @@ scope to **Phase C only**.
 
 ## Where to read the system
 
-- `docs/system.md` — the keeper. 27 decisions + per-sprint "what was
+- `docs/system.md` — the keeper. 29 decisions + per-sprint "what was
   learned." Read first.
 - `docs/status.md` — sprint table.
 - `docs/api/` — complete API reference.
@@ -142,10 +129,11 @@ scope to **Phase C only**.
 - `docs/cheatsheet-numpy.md` — NumPy ↔ NumPHP.
 - `docs/coverage-audit-2026-05-01.md` — the audit that drove sprint 13b.
 - `examples/` — runnable scripts demonstrating real workflows.
+- `src/` — C source.
 - `docs/user-stories/done/` — completed stories.
-  `docs/user-stories/backlog/` — remaining (story 11 with phases A+B done
-  and C deferred, 12, 13 with phases A+B done and C deferred, 14 new).
-- `CHANGELOG.md` — `0.0.1` through `0.0.11`.
+  `docs/user-stories/backlog/` — remaining (story 11 with phases A+B
+  done and C deferred, 12, 13 with phases A+B done and C deferred, 14 new).
+- `CHANGELOG.md` — `0.0.1` through `0.0.12`.
 
 ## How to resume
 
@@ -169,5 +157,5 @@ already installed. `valgrind` not installed locally; CI runs the valgrind
 lane in GitHub Actions.
 
 `make test` interactive prompt: always run with `NO_INTERACTION=true`
-(now set as a workflow-level env in `.github/workflows/ci.yml` too) so
-no `php_test_results_*.txt` reports get auto-saved into the working tree.
+(set as workflow-level env in `.github/workflows/ci.yml`) so no
+`php_test_results_*.txt` reports get auto-saved into the working tree.

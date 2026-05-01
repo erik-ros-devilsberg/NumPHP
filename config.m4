@@ -30,6 +30,9 @@ if test "$PHP_NUMPHP" != "no"; then
   PHP_SUBST(NUMPHP_SHARED_LIBADD)
 
   PHP_NEW_EXTENSION(numphp,
-    numphp.c ndarray.c ops.c linalg.c nditer.c io.c bufferview.c,
+    src/numphp.c src/ndarray.c src/ops.c src/linalg.c src/nditer.c src/io.c src/bufferview.c,
     $ext_shared,, -DZEND_ENABLE_STATIC_TSRMLS_CACHE=1)
+
+  dnl Make headers in src/ visible so cross-file `#include "numphp.h"` resolves.
+  PHP_ADD_INCLUDE([$ext_srcdir/src])
 fi

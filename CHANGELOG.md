@@ -7,6 +7,19 @@ and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.
 
 ## [Unreleased]
 
+## [0.0.12] — 2026-05-01
+
+### Changed — Story 15: project layout
+- All 15 C/H source files moved from the project root to `src/`. The root now holds only the meta files a newcomer reads first (`README.md`, `CHANGELOG.md`, `LICENSE`, `CLAUDE.md`, `.gitignore`, `config.m4`).
+- `config.m4` updated: source paths prefixed with `src/`; `PHP_ADD_INCLUDE([$ext_srcdir/src])` added so cross-file `#include "numphp.h"` keeps resolving.
+- `git mv` used throughout so `git blame` follows.
+- No behavioural change: 60 phpt + 1 FFI-skip pass, all 5 examples still match their `.expected`, doc snippet harness still green.
+
+### Added
+- `LICENSE` — BSD 3-Clause, matching the broader numerical-Python ecosystem (NumPy, SciPy, pandas, scikit-learn).
+- README's "License" section updated to point at the new file (was previously a TBD placeholder).
+- Bumped `PHP_NUMPHP_VERSION` to `0.0.12`.
+
 ## [0.0.11] — 2026-05-01
 
 ### Added — Story 13 Phase B: examples, snippet-as-test harness, gap-closure tests

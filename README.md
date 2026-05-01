@@ -76,4 +76,4 @@ print_r($a->transpose()->shape()); // [4, 3]
 
 ## License
 
-(See `LICENSE` — to be finalised before 1.0 release.)
+BSD 3-Clause — same as NumPy, SciPy, and the broader numerical-Python ecosystem. See [`LICENSE`](LICENSE).
