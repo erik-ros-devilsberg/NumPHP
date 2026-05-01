@@ -1136,6 +1136,87 @@ print_r($x->nancumsum()->toArray());        // [1, 1, 4, 8]
 
 ---
 
+## Comparison ops (static)
+
+Element-wise comparison. All six return a fresh `bool` NDArray of the broadcast shape. Inputs are promoted to a common dtype before comparing. Scalars are accepted on either side.
+
+| Method | NumPy equivalent | Sense |
+|--------|------------------|-------|
+| `NDArray::eq($a, $b)` | `np.equal` | `$a == $b` |
+| `NDArray::ne($a, $b)` | `np.not_equal` | `$a != $b` |
+| `NDArray::lt($a, $b)` | `np.less` | `$a < $b` |
+| `NDArray::le($a, $b)` | `np.less_equal` | `$a <= $b` |
+| `NDArray::gt($a, $b)` | `np.greater` | `$a > $b` |
+| `NDArray::ge($a, $b)` | `np.greater_equal` | `$a >= $b` |
+
+**Signature:** `public static function <op>(mixed $a, mixed $b): NDArray`
+
+**Returns:** `NDArray` of dtype `bool` with the broadcast shape.
+
+**Throws:** `\ShapeException` on incompatible broadcast.
+
+**NaN policy** (IEEE 754 + NumPy — see [decision 33](../system.md) and [NaN policy](../concepts/nan-policy.md)):
+
+| Op | Either operand is NaN |
+|----|------------------------|
+| `eq` | `false` |
+| `ne` | **`true`** |
+| `lt`, `le`, `gt`, `ge` | `false` |
+
+**Why method-only:** PHP's `==` / `<` / etc. operators are deliberately not overloaded for NDArray. Zend Engine's comparison hook returns a single ordering int, not an element-wise array. Using the explicit method form keeps "compare two arrays" syntactically obvious and unambiguous. Locked by [decision 35](../system.md).
+
+**Example:**
+
+```php
+$a = NDArray::fromArray([1.0, 2.0, 3.0, 4.0]);
+$b = NDArray::fromArray([1.0, 2.5, 3.0, 4.0]);
+
+print_r(NDArray::eq($a, $b)->toArray());     // [true, false, true, true]
+print_r(NDArray::lt($a, $b)->toArray());     // [false, true, false, false]
+print_r(NDArray::gt($a, 2)->toArray());      // [false, false, true, true]
+```
+
+---
+
+## Where (static)
+
+### NDArray::where(): NDArray
+
+Element-wise select: pick from `$x` where `$cond` is true, otherwise from `$y`.
+
+**Signature:** `public static function where(NDArray $cond, mixed $x, mixed $y): NDArray`
+
+**Parameters:**
+
+| Name | Type | Description |
+|------|------|-------------|
+| `$cond` | `NDArray` of `bool` | Selector. Must be bool dtype. |
+| `$x` | scalar or `NDArray` | Value when `$cond` is true. |
+| `$y` | scalar or `NDArray` | Value when `$cond` is false. |
+
+**Returns:** `NDArray` of the broadcast shape across all three. Output dtype is the promotion of `$x` and `$y` — **`$cond`'s dtype is irrelevant** to the output dtype.
+
+**Throws:**
+
+- `\DTypeException` if `$cond` is not a bool NDArray.
+- `\ShapeException` on incompatible broadcast.
+
+**Example:**
+
+```php
+// ReLU — clip negatives to zero
+$v = NDArray::fromArray([-2.0, -1.0, 0.0, 1.0, 2.0]);
+$pos = NDArray::gt($v, 0);
+print_r(NDArray::where($pos, $v, 0.0)->toArray());
+// [0, 0, 0, 1, 2]
+```
+
+```
+Array ( [0] => 0 [1] => 0 [2] => 0 [3] => 1 [4] => 2 )
+```
+
+---
+
 ## Sort
 
 ### NDArray::sort(): NDArray

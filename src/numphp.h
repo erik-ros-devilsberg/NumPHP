@@ -7,7 +7,7 @@
 
 #include "php.h"
 
-#define PHP_NUMPHP_VERSION "0.0.17"
+#define PHP_NUMPHP_VERSION "0.0.18"
 
 #ifdef ZTS
 #error "numphp v1 does not support ZTS builds; rebuild PHP with --disable-zts."

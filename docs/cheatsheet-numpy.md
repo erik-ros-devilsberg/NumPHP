@@ -116,6 +116,17 @@ Conventions:
 
 ---
 
+## Comparisons & where
+
+| NumPy | NumPHP | Notes |
+|-------|--------|-------|
+| `a == b` | `NDArray::eq($a, $b)` | **Diverges**: PHP's `==` operator is not overloaded for NDArray. Use the static method to get an element-wise bool array. |
+| `a != b` | `NDArray::ne($a, $b)` | NaN-aware: `ne(NAN, NAN)` returns `true` per IEEE 754. |
+| `a < b`, `<=`, `>`, `>=` | `NDArray::lt($a, $b)`, `le`, `gt`, `ge` | All return bool NDArrays. |
+| `np.where(cond, x, y)` | `NDArray::where($cond, $x, $y)` | `$cond` must be bool. Output dtype = promotion of `$x` and `$y`. |
+
+---
+
 ## Sorting
 
 | NumPy | NumPHP | Notes |

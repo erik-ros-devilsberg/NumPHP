@@ -24,12 +24,12 @@ static numphp_dtype reduce_out_dtype(numphp_reduce_op op, numphp_dtype in)
 {
     switch (op) {
         case NUMPHP_REDUCE_SUM:
-            if (in == NUMPHP_INT32 || in == NUMPHP_INT64) return NUMPHP_INT64;
+            if (in == NUMPHP_INT32 || in == NUMPHP_INT64 || in == NUMPHP_BOOL) return NUMPHP_INT64;
             return in;
         case NUMPHP_REDUCE_MEAN:
         case NUMPHP_REDUCE_VAR:
         case NUMPHP_REDUCE_STD:
-            if (in == NUMPHP_INT32 || in == NUMPHP_INT64) return NUMPHP_FLOAT64;
+            if (in == NUMPHP_INT32 || in == NUMPHP_INT64 || in == NUMPHP_BOOL) return NUMPHP_FLOAT64;
             return in;
         case NUMPHP_REDUCE_MIN:
         case NUMPHP_REDUCE_MAX:
@@ -654,7 +654,7 @@ static void cum_line_i64(const int64_t *src, int64_t *dst,
 
 static numphp_dtype cumulative_out_dtype(numphp_dtype in)
 {
-    if (in == NUMPHP_INT32 || in == NUMPHP_INT64) return NUMPHP_INT64;
+    if (in == NUMPHP_INT32 || in == NUMPHP_INT64 || in == NUMPHP_BOOL) return NUMPHP_INT64;
     return in;
 }
 
@@ -782,6 +782,147 @@ numphp_ndarray *numphp_cumulative(numphp_ndarray *src, numphp_cumulative_op op,
     }
 
     if (owned) numphp_ndarray_free(contig);
+    return out;
+}
+
+/* ============================================================================
+ * Comparison ops — eq / ne / lt / le / gt / ge → bool
+ * ----------------------------------------------------------------------------
+ * Inputs are promoted to a common dtype before comparing. Output is always
+ * NUMPHP_BOOL of the broadcast shape. NaN policy (decision 33):
+ *   eq / lt / le / gt / ge → false if either operand is NaN
+ *   ne                     → true  if either operand is NaN  (IEEE 754)
+ * Integer-input fast path skips the NaN test (no NaNs in int).
+ * ========================================================================== */
+
+static inline uint8_t cmp_compute_double(double a, double b, numphp_compare_op op)
+{
+    if (isnan(a) || isnan(b)) {
+        return (op == NUMPHP_CMP_NE) ? 1 : 0;
+    }
+    switch (op) {
+        case NUMPHP_CMP_EQ: return a == b ? 1 : 0;
+        case NUMPHP_CMP_NE: return a != b ? 1 : 0;
+        case NUMPHP_CMP_LT: return a <  b ? 1 : 0;
+        case NUMPHP_CMP_LE: return a <= b ? 1 : 0;
+        case NUMPHP_CMP_GT: return a >  b ? 1 : 0;
+        case NUMPHP_CMP_GE: return a >= b ? 1 : 0;
+    }
+    return 0;
+}
+
+static inline uint8_t cmp_compute_int64(int64_t a, int64_t b, numphp_compare_op op)
+{
+    switch (op) {
+        case NUMPHP_CMP_EQ: return a == b ? 1 : 0;
+        case NUMPHP_CMP_NE: return a != b ? 1 : 0;
+        case NUMPHP_CMP_LT: return a <  b ? 1 : 0;
+        case NUMPHP_CMP_LE: return a <= b ? 1 : 0;
+        case NUMPHP_CMP_GT: return a >  b ? 1 : 0;
+        case NUMPHP_CMP_GE: return a >= b ? 1 : 0;
+    }
+    return 0;
+}
+
+numphp_ndarray *numphp_compare(numphp_ndarray *a, numphp_ndarray *b,
+                               numphp_compare_op op)
+{
+    int out_ndim;
+    zend_long out_shape[NUMPHP_MAX_NDIM];
+    numphp_ndarray *ops[2] = { a, b };
+    if (!numphp_broadcast_shape(2, ops, &out_ndim, out_shape)) return NULL;
+
+    numphp_dtype cmp_dt = numphp_promote_dtype(a->dtype, b->dtype);
+    int int_path = (cmp_dt == NUMPHP_INT32 || cmp_dt == NUMPHP_INT64
+                 || cmp_dt == NUMPHP_BOOL);
+
+    numphp_ndarray *out = numphp_ndarray_alloc_owner(NUMPHP_BOOL, out_ndim, out_shape);
+
+    numphp_nditer it;
+    if (!numphp_nditer_init(&it, 2, ops, out)) {
+        numphp_ndarray_free(out);
+        return NULL;
+    }
+
+    if (it.size > 0) do {
+        uint8_t r;
+        if (int_path) {
+            int64_t av = numphp_read_i64(it.ptr[0], a->dtype);
+            int64_t bv = numphp_read_i64(it.ptr[1], b->dtype);
+            r = cmp_compute_int64(av, bv, op);
+        } else {
+            double av = numphp_read_f64(it.ptr[0], a->dtype);
+            double bv = numphp_read_f64(it.ptr[1], b->dtype);
+            r = cmp_compute_double(av, bv, op);
+        }
+        *(uint8_t *)it.ptr[2] = r;
+        numphp_nditer_next(&it);
+    } while (!it.done);
+
+    return out;
+}
+
+/* ============================================================================
+ * where(cond, x, y) — element-wise select
+ * ----------------------------------------------------------------------------
+ * cond must be NUMPHP_BOOL; throws \DTypeException otherwise. Output dtype is
+ * the promotion of x and y (cond's dtype is intentionally irrelevant — story
+ * 17 rule). Broadcasts across all three operands.
+ * ========================================================================== */
+
+numphp_ndarray *numphp_where(numphp_ndarray *cond,
+                             numphp_ndarray *x,
+                             numphp_ndarray *y)
+{
+    if (cond->dtype != NUMPHP_BOOL) {
+        zend_throw_exception_ex(numphp_dtype_exception_ce, 0,
+            "where: cond must be bool dtype, got %s",
+            numphp_dtype_name(cond->dtype));
+        return NULL;
+    }
+
+    int out_ndim;
+    zend_long out_shape[NUMPHP_MAX_NDIM];
+    numphp_ndarray *ops[3] = { cond, x, y };
+    if (!numphp_broadcast_shape(3, ops, &out_ndim, out_shape)) return NULL;
+
+    numphp_dtype out_dt = numphp_promote_dtype(x->dtype, y->dtype);
+    numphp_ndarray *out = numphp_ndarray_alloc_owner(out_dt, out_ndim, out_shape);
+
+    numphp_nditer it;
+    if (!numphp_nditer_init(&it, 3, ops, out)) {
+        numphp_ndarray_free(out);
+        return NULL;
+    }
+
+    if (it.size > 0) do {
+        uint8_t c = *(const uint8_t *)it.ptr[0];
+        const char *src = c ? it.ptr[1] : it.ptr[2];
+        numphp_dtype src_dt = c ? x->dtype : y->dtype;
+        char *dst = it.ptr[3];
+
+        switch (out_dt) {
+            case NUMPHP_FLOAT64:
+                *(double *)dst = numphp_read_f64(src, src_dt);
+                break;
+            case NUMPHP_FLOAT32:
+                *(float *)dst = numphp_read_f32(src, src_dt);
+                break;
+            case NUMPHP_INT64:
+                *(int64_t *)dst = numphp_read_i64(src, src_dt);
+                break;
+            case NUMPHP_INT32:
+                *(int32_t *)dst = (int32_t)numphp_read_i64(src, src_dt);
+                break;
+            case NUMPHP_BOOL: {
+                int64_t v = numphp_read_i64(src, src_dt);
+                *(uint8_t *)dst = (v != 0) ? 1 : 0;
+                break;
+            }
+        }
+        numphp_nditer_next(&it);
+    } while (!it.done);
+
     return out;
 }
 

@@ -25,6 +25,7 @@ zend_long numphp_dtype_size(numphp_dtype dt)
         case NUMPHP_FLOAT64: return 8;
         case NUMPHP_INT32:   return 4;
         case NUMPHP_INT64:   return 8;
+        case NUMPHP_BOOL:    return 1;
     }
     return 0;
 }
@@ -36,6 +37,7 @@ const char *numphp_dtype_name(numphp_dtype dt)
         case NUMPHP_FLOAT64: return "float64";
         case NUMPHP_INT32:   return "int32";
         case NUMPHP_INT64:   return "int64";
+        case NUMPHP_BOOL:    return "bool";
     }
     return "unknown";
 }
@@ -46,6 +48,7 @@ int numphp_dtype_from_name(const char *name, size_t len, numphp_dtype *out)
     if (len == 7 && memcmp(name, "float64", 7) == 0) { *out = NUMPHP_FLOAT64; return 1; }
     if (len == 5 && memcmp(name, "int32", 5) == 0)   { *out = NUMPHP_INT32;   return 1; }
     if (len == 5 && memcmp(name, "int64", 5) == 0)   { *out = NUMPHP_INT64;   return 1; }
+    if (len == 4 && memcmp(name, "bool",  4) == 0)   { *out = NUMPHP_BOOL;    return 1; }
     return 0;
 }
 
@@ -348,6 +351,12 @@ static void fill_typed(void *buf, zend_long size, numphp_dtype dt, zval *value)
             for (zend_long i = 0; i < size; i++) p[i] = v;
             break;
         }
+        case NUMPHP_BOOL: {
+            uint8_t v = (lv != 0 || dv != 0.0) ? 1 : 0;
+            uint8_t *p = (uint8_t *)buf;
+            for (zend_long i = 0; i < size; i++) p[i] = v;
+            break;
+        }
     }
 }
 
@@ -481,6 +490,7 @@ PHP_METHOD(NDArray, eye)
             case NUMPHP_FLOAT64: *(double *)p  = 1.0;  break;
             case NUMPHP_INT32:   *(int32_t *)p = 1;    break;
             case NUMPHP_INT64:   *(int64_t *)p = 1;    break;
+            case NUMPHP_BOOL:    *(uint8_t *)p = 1;    break;
         }
     }
 
@@ -547,6 +557,7 @@ PHP_METHOD(NDArray, arange)
             case NUMPHP_FLOAT64: ((double *)buf)[i]  = v;            break;
             case NUMPHP_INT32:   ((int32_t *)buf)[i] = (int32_t)v;   break;
             case NUMPHP_INT64:   ((int64_t *)buf)[i] = (int64_t)v;   break;
+            case NUMPHP_BOOL:    ((uint8_t *)buf)[i] = (v != 0.0) ? 1 : 0; break;
         }
     }
 
@@ -608,6 +619,7 @@ static void fromarray_fill(zval *node, int depth, int ndim, char **out_ptr, nump
             case NUMPHP_FLOAT64: *(double *)*out_ptr  = dv;            *out_ptr += 8; break;
             case NUMPHP_INT32:   *(int32_t *)*out_ptr = (int32_t)lv;   *out_ptr += 4; break;
             case NUMPHP_INT64:   *(int64_t *)*out_ptr = (int64_t)lv;   *out_ptr += 8; break;
+            case NUMPHP_BOOL:    *(uint8_t *)*out_ptr = (lv != 0 || dv != 0.0) ? 1 : 0; *out_ptr += 1; break;
         }
         return;
     }
@@ -695,6 +707,7 @@ static void toarray_recursive(numphp_ndarray *a, int dim, zend_long offset, zval
             case NUMPHP_FLOAT64: ZVAL_DOUBLE(out, *(double *)p);  break;
             case NUMPHP_INT32:   ZVAL_LONG(out, *(int32_t *)p);   break;
             case NUMPHP_INT64:   ZVAL_LONG(out, *(int64_t *)p);   break;
+            case NUMPHP_BOOL:    ZVAL_BOOL(out, (*(uint8_t *)p) != 0); break;
         }
         return;
     }
@@ -717,6 +730,7 @@ PHP_METHOD(NDArray, toArray)
             case NUMPHP_FLOAT64: RETURN_DOUBLE(*(double *)p);
             case NUMPHP_INT32:   RETURN_LONG(*(int32_t *)p);
             case NUMPHP_INT64:   RETURN_LONG(*(int64_t *)p);
+            case NUMPHP_BOOL:    RETURN_BOOL((*(uint8_t *)p) != 0);
         }
     }
     toarray_recursive(a, 0, a->offset, return_value);
@@ -754,6 +768,11 @@ void numphp_write_scalar_at(char *p, numphp_dtype dt, double dv, zend_long lv)
         case NUMPHP_FLOAT64: *(double *)p  = dv;            break;
         case NUMPHP_INT32:   *(int32_t *)p = (int32_t)lv;   break;
         case NUMPHP_INT64:   *(int64_t *)p = (int64_t)lv;   break;
+        /* bool: canonicalise to 0/1 on write (decision 32). Either argument
+         * being non-zero counts as true — covers callers that only fill `lv`,
+         * callers that only fill `dv`, and the NaN case (NaN != 0.0 → true,
+         * matching NumPy). */
+        case NUMPHP_BOOL:    *(uint8_t *)p = (lv != 0 || dv != 0.0) ? 1 : 0; break;
     }
 }
 
@@ -764,6 +783,8 @@ void numphp_read_scalar_at(const char *p, numphp_dtype dt, double *dv_out, zend_
         case NUMPHP_FLOAT64: *dv_out = *(const double *)p;           *lv_out = (zend_long)*dv_out; break;
         case NUMPHP_INT32:   *lv_out = *(const int32_t *)p;          *dv_out = (double)*lv_out;    break;
         case NUMPHP_INT64:   *lv_out = *(const int64_t *)p;          *dv_out = (double)*lv_out;    break;
+        /* bool: any non-zero byte → 1 (lenient read; decision 32). */
+        case NUMPHP_BOOL:    *lv_out = (*(const uint8_t *)p) != 0 ? 1 : 0; *dv_out = (double)*lv_out; break;
     }
 }
 
@@ -794,6 +815,7 @@ static zval *numphp_offset_get(zend_object *zo, zval *offset, int type, zval *rv
             case NUMPHP_FLOAT64: ZVAL_DOUBLE(rv, *(double *)p); break;
             case NUMPHP_INT32:   ZVAL_LONG(rv, *(int32_t *)p);  break;
             case NUMPHP_INT64:   ZVAL_LONG(rv, *(int64_t *)p);  break;
+            case NUMPHP_BOOL:    ZVAL_BOOL(rv, (*(uint8_t *)p) != 0); break;
         }
         return rv;
     }
@@ -1042,7 +1064,11 @@ static int do_binary_op_core(zend_uchar opcode, zval *result, zval *op1, zval *o
      && a->dtype == out_dt
      && b->dtype == out_dt
      && a->ndim == out_ndim
-     && b->ndim == out_ndim;
+     && b->ndim == out_ndim
+     /* bool arithmetic needs write-canonicalisation (decision 32); the typed
+      * fast-path loops bypass numphp_write_scalar_at, so route bool through
+      * the slow path where the canonicalising switch handles it. */
+     && out_dt != NUMPHP_BOOL;
     if (fast_ok) {
         for (int d = 0; d < out_ndim; d++) {
             if (a->shape[d] != out_shape[d] || b->shape[d] != out_shape[d]) {
@@ -1123,6 +1149,9 @@ static int do_binary_op_core(zend_uchar opcode, zval *result, zval *op1, zval *o
                 }
                 break;
             }
+            case NUMPHP_BOOL:
+                /* Unreachable — fast_ok predicate excludes bool (decision 32). */
+                break;
         }
 
         if (free_a) numphp_ndarray_free(a);
@@ -1202,6 +1231,26 @@ static int do_binary_op_core(zend_uchar opcode, zval *result, zval *op1, zval *o
                     case OP_DIV: rv = av / bv; break;
                 }
                 *(int32_t *)it.ptr[2] = rv;
+                break;
+            }
+            case NUMPHP_BOOL: {
+                /* bool ⊕ bool — read as int64, compute, write-canonicalise to 0/1
+                 * (decision 32). Effectively: + → OR, * → AND, − → XOR. */
+                int64_t av = numphp_read_i64(it.ptr[0], a->dtype);
+                int64_t bv = numphp_read_i64(it.ptr[1], b->dtype);
+                if (op == OP_DIV && bv == 0) {
+                    zend_throw_exception(zend_ce_division_by_zero_error, "Division by zero", 0);
+                    ok = 0;
+                    break;
+                }
+                int64_t rv = 0;
+                switch (op) {
+                    case OP_ADD: rv = av + bv; break;
+                    case OP_SUB: rv = av - bv; break;
+                    case OP_MUL: rv = av * bv; break;
+                    case OP_DIV: rv = av / bv; break;
+                }
+                *(uint8_t *)it.ptr[2] = (rv != 0) ? 1 : 0;
                 break;
             }
         }
@@ -2067,6 +2116,7 @@ static void scalar_zval_from_buffer(zval *out, char *p, numphp_dtype dt)
         case NUMPHP_FLOAT64: ZVAL_DOUBLE(out, *(double *)p);  break;
         case NUMPHP_INT32:   ZVAL_LONG(out, *(int32_t *)p);   break;
         case NUMPHP_INT64:   ZVAL_LONG(out, *(int64_t *)p);   break;
+        case NUMPHP_BOOL:    ZVAL_BOOL(out, (*(uint8_t *)p) != 0); break;
     }
 }
 
@@ -2171,6 +2221,91 @@ PHP_METHOD(NDArray, cumsum)     { do_cumulative_method(INTERNAL_FUNCTION_PARAM_P
 PHP_METHOD(NDArray, cumprod)    { do_cumulative_method(INTERNAL_FUNCTION_PARAM_PASSTHRU, NUMPHP_CUM_PROD, 0); }
 PHP_METHOD(NDArray, nancumsum)  { do_cumulative_method(INTERNAL_FUNCTION_PARAM_PASSTHRU, NUMPHP_CUM_SUM,  1); }
 PHP_METHOD(NDArray, nancumprod) { do_cumulative_method(INTERNAL_FUNCTION_PARAM_PASSTHRU, NUMPHP_CUM_PROD, 1); }
+
+/* ===== comparison ops ===== */
+
+static void do_compare_method(INTERNAL_FUNCTION_PARAMETERS, numphp_compare_op op)
+{
+    zval *op1, *op2;
+    ZEND_PARSE_PARAMETERS_START(2, 2)
+        Z_PARAM_ZVAL(op1)
+        Z_PARAM_ZVAL(op2)
+    ZEND_PARSE_PARAMETERS_END();
+
+    numphp_ndarray *a, *b;
+    int free_a = 0, free_b = 0;
+
+    if (Z_TYPE_P(op1) == IS_OBJECT
+     && instanceof_function(Z_OBJCE_P(op1), numphp_ndarray_ce)) {
+        a = Z_NDARRAY_P(op1);
+    } else {
+        a = scalar_to_0d_ndarray(op1);
+        free_a = 1;
+    }
+    if (Z_TYPE_P(op2) == IS_OBJECT
+     && instanceof_function(Z_OBJCE_P(op2), numphp_ndarray_ce)) {
+        b = Z_NDARRAY_P(op2);
+    } else {
+        b = scalar_to_0d_ndarray(op2);
+        free_b = 1;
+    }
+
+    numphp_ndarray *out = numphp_compare(a, b, op);
+    if (free_a) numphp_ndarray_free(a);
+    if (free_b) numphp_ndarray_free(b);
+    if (!out) RETURN_THROWS();
+    numphp_zval_wrap_ndarray(return_value, out);
+}
+
+PHP_METHOD(NDArray, eq) { do_compare_method(INTERNAL_FUNCTION_PARAM_PASSTHRU, NUMPHP_CMP_EQ); }
+PHP_METHOD(NDArray, ne) { do_compare_method(INTERNAL_FUNCTION_PARAM_PASSTHRU, NUMPHP_CMP_NE); }
+PHP_METHOD(NDArray, lt) { do_compare_method(INTERNAL_FUNCTION_PARAM_PASSTHRU, NUMPHP_CMP_LT); }
+PHP_METHOD(NDArray, le) { do_compare_method(INTERNAL_FUNCTION_PARAM_PASSTHRU, NUMPHP_CMP_LE); }
+PHP_METHOD(NDArray, gt) { do_compare_method(INTERNAL_FUNCTION_PARAM_PASSTHRU, NUMPHP_CMP_GT); }
+PHP_METHOD(NDArray, ge) { do_compare_method(INTERNAL_FUNCTION_PARAM_PASSTHRU, NUMPHP_CMP_GE); }
+
+/* ===== where ===== */
+
+PHP_METHOD(NDArray, where)
+{
+    zval *cond_z, *x_z, *y_z;
+    ZEND_PARSE_PARAMETERS_START(3, 3)
+        Z_PARAM_ZVAL(cond_z)
+        Z_PARAM_ZVAL(x_z)
+        Z_PARAM_ZVAL(y_z)
+    ZEND_PARSE_PARAMETERS_END();
+
+    if (Z_TYPE_P(cond_z) != IS_OBJECT
+     || !instanceof_function(Z_OBJCE_P(cond_z), numphp_ndarray_ce)) {
+        zend_throw_exception(numphp_dtype_exception_ce,
+            "where: cond must be a bool NDArray", 0);
+        RETURN_THROWS();
+    }
+    numphp_ndarray *cond = Z_NDARRAY_P(cond_z);
+
+    numphp_ndarray *x, *y;
+    int free_x = 0, free_y = 0;
+    if (Z_TYPE_P(x_z) == IS_OBJECT
+     && instanceof_function(Z_OBJCE_P(x_z), numphp_ndarray_ce)) {
+        x = Z_NDARRAY_P(x_z);
+    } else {
+        x = scalar_to_0d_ndarray(x_z);
+        free_x = 1;
+    }
+    if (Z_TYPE_P(y_z) == IS_OBJECT
+     && instanceof_function(Z_OBJCE_P(y_z), numphp_ndarray_ce)) {
+        y = Z_NDARRAY_P(y_z);
+    } else {
+        y = scalar_to_0d_ndarray(y_z);
+        free_y = 1;
+    }
+
+    numphp_ndarray *out = numphp_where(cond, x, y);
+    if (free_x) numphp_ndarray_free(x);
+    if (free_y) numphp_ndarray_free(y);
+    if (!out) RETURN_THROWS();
+    numphp_zval_wrap_ndarray(return_value, out);
+}
 
 /* ===== element-wise math ===== */
 
@@ -2445,6 +2580,19 @@ ZEND_BEGIN_ARG_WITH_RETURN_OBJ_INFO_EX(arginfo_binary_op, 0, 2, NDArray, 0)
     ZEND_ARG_INFO(0, b)
 ZEND_END_ARG_INFO()
 
+/* eq / ne / lt / le / gt / ge: ($a, $b) → NDArray (bool) */
+ZEND_BEGIN_ARG_WITH_RETURN_OBJ_INFO_EX(arginfo_compare, 0, 2, NDArray, 0)
+    ZEND_ARG_INFO(0, a)
+    ZEND_ARG_INFO(0, b)
+ZEND_END_ARG_INFO()
+
+/* where: (cond, x, y) → NDArray */
+ZEND_BEGIN_ARG_WITH_RETURN_OBJ_INFO_EX(arginfo_where, 0, 3, NDArray, 0)
+    ZEND_ARG_INFO(0, cond)
+    ZEND_ARG_INFO(0, x)
+    ZEND_ARG_INFO(0, y)
+ZEND_END_ARG_INFO()
+
 ZEND_BEGIN_ARG_WITH_RETURN_OBJ_INFO_EX(arginfo_reshape, 0, 1, NDArray, 0)
     ZEND_ARG_TYPE_INFO(0, shape, IS_ARRAY, 0)
 ZEND_END_ARG_INFO()
@@ -2603,6 +2751,14 @@ static const zend_function_entry numphp_ndarray_methods[] = {
     PHP_ME(NDArray, cumprod,    arginfo_cumulative, ZEND_ACC_PUBLIC)
     PHP_ME(NDArray, nancumsum,  arginfo_cumulative, ZEND_ACC_PUBLIC)
     PHP_ME(NDArray, nancumprod, arginfo_cumulative, ZEND_ACC_PUBLIC)
+
+    PHP_ME(NDArray, eq,    arginfo_compare, ZEND_ACC_PUBLIC | ZEND_ACC_STATIC)
+    PHP_ME(NDArray, ne,    arginfo_compare, ZEND_ACC_PUBLIC | ZEND_ACC_STATIC)
+    PHP_ME(NDArray, lt,    arginfo_compare, ZEND_ACC_PUBLIC | ZEND_ACC_STATIC)
+    PHP_ME(NDArray, le,    arginfo_compare, ZEND_ACC_PUBLIC | ZEND_ACC_STATIC)
+    PHP_ME(NDArray, gt,    arginfo_compare, ZEND_ACC_PUBLIC | ZEND_ACC_STATIC)
+    PHP_ME(NDArray, ge,    arginfo_compare, ZEND_ACC_PUBLIC | ZEND_ACC_STATIC)
+    PHP_ME(NDArray, where, arginfo_where,   ZEND_ACC_PUBLIC | ZEND_ACC_STATIC)
 
     /* element-wise math (the trailing-underscore C names map to clean PHP names) */
     PHP_MALIAS(NDArray, sqrt,  sqrt_,  arginfo_unary, ZEND_ACC_PUBLIC)

@@ -7,6 +7,29 @@ and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.
 
 ## [Unreleased]
 
+## [0.0.18] — 2026-05-01
+
+### Added — Story 17: bool dtype, comparisons, and where
+Three things, one sprint, in this order — each strictly depends on the prior.
+
+- **New `bool` dtype** — `"bool"` is now a recognised dtype string in every factory (`zeros`, `ones`, `full`, `eye`, `arange`, `fromArray`) and in the binary I/O format. Storage is 1 byte per element with canonical `0`/`1` values: writes canonicalise (`(value != 0) ? 1 : 0`); reads accept any non-zero byte as true. `bool + bool` arithmetic falls through to the slow path and behaves as logical OR (matches NumPy via the canonicalising write). The promotion table widened to 5×5 — `bool` sits at the bottom: `bool ⊕ X = X` for all non-bool X, `bool ⊕ bool = bool`. `bool` flows through every existing reduction (sum/cumsum/cumprod → int64, mean/var/std → f64, min/max preserve bool, argmin/argmax → int64) and through shape ops (`transpose`, `reshape`, `slice`, `concatenate`).
+- **Six static comparison methods** — `NDArray::eq($a, $b)`, `ne`, `lt`, `le`, `gt`, `ge` return a fresh `bool` NDArray of the broadcast shape. Inputs are promoted to a common dtype before comparing; scalars accepted on either side. **NaN policy corrected from the story's literal wording** to IEEE 754 / NumPy: `eq` / `lt` / `le` / `gt` / `ge` return `false` on NaN; **`ne` returns `true` on NaN** (NaN is unequal to everything per IEEE 754, and `np.not_equal(np.nan, np.nan)` is `True`). PHP's `==` / `<` etc. operators are **not** overloaded for NDArray — Zend Engine's comparison hook returns a single ordering int that doesn't fit "return an array of element-wise results."
+- **`NDArray::where($cond, $x, $y)`** — element select. `$cond` must be a bool NDArray (else `\DTypeException`); `$x` and `$y` may be scalars or NDArrays broadcastable with each other and with `$cond`. **Output dtype is the promotion of `$x` and `$y`** — `$cond`'s dtype is intentionally irrelevant. Broadcasts across all three operands using the existing 4-operand nditer (`NUMPHP_ITER_MAX_OPERANDS = 4` already accommodated).
+
+### Decisions locked
+- **Decision 32** — bool storage layout (canonical 0/1, lenient read, strict write). Rationale: keeps the promotion table consistent without a separate arithmetic-only table.
+- **Decision 33** — comparison NaN policy (IEEE 754, story wording corrected).
+- **Decision 34** — bool through reductions follows int promotion logic.
+- **Decision 35** — comparison ops are method-only in v1.
+
+### Tests + build
+- 4 new phpt tests (`064-bool-dtype.phpt`, `065-comparisons.phpt`, `066-where.phpt`, `067-bool-through-existing-ops.phpt`) cover dtype plumbing × every comparison op × broadcasting × NaN policy × where with all-array / scalar-mixed / 3-way-broadcast / cond-not-bool / shape-mismatch × bool through every existing reduction × bool through shape ops.
+- 67/67 phpt + 1 skipped (FFI). Build clean at `-Wall -Wextra`.
+- Bumped `PHP_NUMPHP_VERSION` to `0.0.18`.
+
+### Notes — what's next
+The bool dtype unlocks several follow-ups: **boolean indexing** (`$arr[$cond]`), **`any` / `all` reductions** on bool arrays, and **bitwise ops** (`&`, `|`, `^`, `~`) for combining masks. All three were explicitly out of scope for this sprint and remain in the backlog.
+
 ## [0.0.17] — 2026-05-01
 
 ### Added — Story 18: cumulative reductions

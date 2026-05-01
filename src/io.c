@@ -144,7 +144,7 @@ numphp_ndarray *numphp_io_load(const char *path, size_t path_len)
     unsigned char dtype_byte = header[8];
     unsigned char ndim       = header[9];
 
-    if (dtype_byte > NUMPHP_INT64) {
+    if (dtype_byte > NUMPHP_BOOL) {
         php_stream_close(s);
         zend_throw_exception_ex(numphp_dtype_exception_ce, 0,
             "NDArray::load: unknown dtype byte %u", (unsigned)dtype_byte);
@@ -222,6 +222,9 @@ static zend_string *format_cell(numphp_dtype dt, char *p)
             break;
         case NUMPHP_INT64:
             n = snprintf(buf, sizeof(buf), "%lld", (long long)*(int64_t *)p);
+            break;
+        case NUMPHP_BOOL:
+            n = snprintf(buf, sizeof(buf), "%d", (*(uint8_t *)p) != 0 ? 1 : 0);
             break;
     }
     if (n < 0) n = 0;

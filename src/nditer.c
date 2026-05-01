@@ -4,14 +4,16 @@
 
 numphp_dtype numphp_promote_dtype(numphp_dtype a, numphp_dtype b)
 {
-    /* Table from docs/system.md.
-     * Indices: NUMPHP_FLOAT32=0, NUMPHP_FLOAT64=1, NUMPHP_INT32=2, NUMPHP_INT64=3 */
-    static const numphp_dtype table[4][4] = {
-        /*           f32             f64             i32             i64    */
-        /* f32 */ { NUMPHP_FLOAT32, NUMPHP_FLOAT64, NUMPHP_FLOAT32, NUMPHP_FLOAT64 },
-        /* f64 */ { NUMPHP_FLOAT64, NUMPHP_FLOAT64, NUMPHP_FLOAT64, NUMPHP_FLOAT64 },
-        /* i32 */ { NUMPHP_FLOAT32, NUMPHP_FLOAT64, NUMPHP_INT32,   NUMPHP_INT64   },
-        /* i64 */ { NUMPHP_FLOAT64, NUMPHP_FLOAT64, NUMPHP_INT64,   NUMPHP_INT64   },
+    /* Table from docs/system.md (decision 3 + decision 32 for the bool row/col).
+     * Indices: NUMPHP_FLOAT32=0, NUMPHP_FLOAT64=1, NUMPHP_INT32=2, NUMPHP_INT64=3, NUMPHP_BOOL=4.
+     * bool is a no-op in promotion: bool ⊕ X = X for X != bool; bool ⊕ bool = bool. */
+    static const numphp_dtype table[5][5] = {
+        /*            f32             f64             i32             i64             bool   */
+        /* f32  */ { NUMPHP_FLOAT32, NUMPHP_FLOAT64, NUMPHP_FLOAT32, NUMPHP_FLOAT64, NUMPHP_FLOAT32 },
+        /* f64  */ { NUMPHP_FLOAT64, NUMPHP_FLOAT64, NUMPHP_FLOAT64, NUMPHP_FLOAT64, NUMPHP_FLOAT64 },
+        /* i32  */ { NUMPHP_FLOAT32, NUMPHP_FLOAT64, NUMPHP_INT32,   NUMPHP_INT64,   NUMPHP_INT32   },
+        /* i64  */ { NUMPHP_FLOAT64, NUMPHP_FLOAT64, NUMPHP_INT64,   NUMPHP_INT64,   NUMPHP_INT64   },
+        /* bool */ { NUMPHP_FLOAT32, NUMPHP_FLOAT64, NUMPHP_INT32,   NUMPHP_INT64,   NUMPHP_BOOL    },
     };
     return table[a][b];
 }

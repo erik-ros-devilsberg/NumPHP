@@ -121,8 +121,33 @@ The default reduction is the strict, propagating one. The nan-variant is an opt-
 
 ---
 
+## Comparisons under NaN
+
+Element-wise comparisons follow IEEE 754, which says NaN is unequal to everything — including itself. NumPy follows IEEE; NumPHP follows NumPy.
+
+| Op | Either operand is NaN |
+|----|------------------------|
+| `eq` | `false` |
+| **`ne`** | **`true`** |
+| `lt`, `le`, `gt`, `ge` | `false` |
+
+So `NDArray::ne(NAN, NAN)` returns `true` — the only comparison op that "sees" a NaN. This is intentional and matches NumPy's `np.not_equal(np.nan, np.nan) == True`. Locked by [decision 33](../system.md).
+
+```php
+$nan = NDArray::fromArray([NAN, NAN, 1.0]);
+$one = NDArray::fromArray([NAN, 1.0, NAN]);
+print_r(NDArray::eq($nan, $one)->toArray());   // [false, false, false]
+print_r(NDArray::ne($nan, $one)->toArray());   // [true,  true,  true ]
+print_r(NDArray::lt($nan, $one)->toArray());   // [false, false, false]
+```
+
+If you want "treat NaN as equal" semantics (e.g. for assertions), filter NaNs out first or use a tolerance comparison built on `abs($a - $b) < $eps`.
+
+---
+
 ## See also
 
-- [Decision 10](../system.md) — NaN policy.
+- [Decision 10](../system.md) — NaN policy in reductions.
+- [Decision 33](../system.md) — comparison NaN policy (IEEE 754).
 - [Decision 9](../system.md) — output dtype rules for reductions.
 - [`NDArray` API reference](../api/ndarray.md#reductions) — every reduction method documents its NaN behaviour.

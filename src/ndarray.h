@@ -13,7 +13,8 @@ typedef enum {
     NUMPHP_FLOAT32 = 0,
     NUMPHP_FLOAT64 = 1,
     NUMPHP_INT32   = 2,
-    NUMPHP_INT64   = 3
+    NUMPHP_INT64   = 3,
+    NUMPHP_BOOL    = 4
 } numphp_dtype;
 
 typedef struct {

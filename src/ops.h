@@ -48,6 +48,27 @@ typedef enum {
 numphp_ndarray *numphp_cumulative(numphp_ndarray *src, numphp_cumulative_op op,
                                   int has_axis, int axis, int skip_nan);
 
+/* Element-wise comparison ops — return a fresh bool NDArray of the broadcast
+ * shape. Inputs are promoted to a common dtype before comparing. NaN policy
+ * (decision 33): eq / lt / le / gt / ge → false on NaN; ne → true on NaN. */
+typedef enum {
+    NUMPHP_CMP_EQ = 0,
+    NUMPHP_CMP_NE,
+    NUMPHP_CMP_LT,
+    NUMPHP_CMP_LE,
+    NUMPHP_CMP_GT,
+    NUMPHP_CMP_GE,
+} numphp_compare_op;
+
+numphp_ndarray *numphp_compare(numphp_ndarray *a, numphp_ndarray *b,
+                               numphp_compare_op op);
+
+/* Element-wise select. cond must be NUMPHP_BOOL; output dtype is the promotion
+ * of x and y (cond's dtype is irrelevant). Broadcasts across all three. */
+numphp_ndarray *numphp_where(numphp_ndarray *cond,
+                             numphp_ndarray *x,
+                             numphp_ndarray *y);
+
 /* Element-wise math ops. All return a freshly allocated C-contiguous owner. */
 typedef enum {
     NUMPHP_MATH_SQRT = 0,

@@ -30,13 +30,15 @@ void numphp_nditer_next(numphp_nditer *it);
 
 numphp_dtype numphp_promote_dtype(numphp_dtype a, numphp_dtype b);
 
-/* typed reads at a byte pointer, given the source dtype */
+/* typed reads at a byte pointer, given the source dtype.
+ * bool reads are lenient: any non-zero byte → 1 (decision 32). */
 static inline double numphp_read_f64(const char *p, numphp_dtype dt) {
     switch (dt) {
         case NUMPHP_FLOAT32: return (double)*(const float *)p;
         case NUMPHP_FLOAT64: return *(const double *)p;
         case NUMPHP_INT32:   return (double)*(const int32_t *)p;
         case NUMPHP_INT64:   return (double)*(const int64_t *)p;
+        case NUMPHP_BOOL:    return (*(const uint8_t *)p) != 0 ? 1.0 : 0.0;
     }
     return 0.0;
 }
@@ -51,6 +53,7 @@ static inline int64_t numphp_read_i64(const char *p, numphp_dtype dt) {
         case NUMPHP_FLOAT64: return (int64_t)*(const double *)p;
         case NUMPHP_INT32:   return (int64_t)*(const int32_t *)p;
         case NUMPHP_INT64:   return *(const int64_t *)p;
+        case NUMPHP_BOOL:    return (*(const uint8_t *)p) != 0 ? 1 : 0;
     }
     return 0;
 }
