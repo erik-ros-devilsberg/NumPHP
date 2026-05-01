@@ -73,6 +73,7 @@ Once a view is constructed, its `$shape`, `$strides`, `$dtype`, `$ptr`, `$writea
 ## Example: zero-copy handoff to FFI
 
 ```php
+// snippet-test: skip — requires the FFI extension, which is not loaded in the test SAPI
 $arr  = NDArray::arange(0, 1000, 1, "float64");
 $view = $arr->bufferView(writeable: true);
 

@@ -555,13 +555,19 @@ PHP_METHOD(NDArray, arange)
 
 /* fromArray: two-pass — infer shape + has_float, then fill */
 
-static int fromarray_walk(zval *node, int depth, zend_long *shape, int *ndim_out, int *has_float_out)
+static int fromarray_walk(zval *node, int depth, zend_long *shape, int *ndim_out,
+                          int *has_float_out, int *rank_locked)
 {
     if (depth >= NUMPHP_MAX_NDIM) {
         zend_throw_exception(numphp_shape_exception_ce, "Array nesting too deep", 0);
         return 0;
     }
     if (Z_TYPE_P(node) == IS_ARRAY) {
+        if (*rank_locked && depth >= *ndim_out) {
+            zend_throw_exception(numphp_shape_exception_ce,
+                "Ragged array: array at leaf depth", 0);
+            return 0;
+        }
         HashTable *ht = Z_ARRVAL_P(node);
         zend_long n = (zend_long)zend_hash_num_elements(ht);
 
@@ -577,7 +583,7 @@ static int fromarray_walk(zval *node, int depth, zend_long *shape, int *ndim_out
         zval *v;
         ZEND_HASH_FOREACH_VAL(ht, v) {
             ZVAL_DEREF(v);
-            if (!fromarray_walk(v, depth + 1, shape, ndim_out, has_float_out)) return 0;
+            if (!fromarray_walk(v, depth + 1, shape, ndim_out, has_float_out, rank_locked)) return 0;
         } ZEND_HASH_FOREACH_END();
     } else {
         if (depth != *ndim_out) {
@@ -585,6 +591,7 @@ static int fromarray_walk(zval *node, int depth, zend_long *shape, int *ndim_out
                 "Ragged array: scalar at non-leaf depth", 0);
             return 0;
         }
+        *rank_locked = 1;
         if (Z_TYPE_P(node) == IS_DOUBLE) *has_float_out = 1;
     }
     return 1;
@@ -626,8 +633,9 @@ PHP_METHOD(NDArray, fromArray)
     zend_long shape[NUMPHP_MAX_NDIM] = {0};
     int ndim = 0;
     int has_float = 0;
+    int rank_locked = 0;
 
-    if (!fromarray_walk(data, 0, shape, &ndim, &has_float)) RETURN_THROWS();
+    if (!fromarray_walk(data, 0, shape, &ndim, &has_float, &rank_locked)) RETURN_THROWS();
 
     numphp_dtype dt;
     if (dtype_name) {

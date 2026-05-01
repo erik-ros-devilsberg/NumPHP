@@ -6,6 +6,9 @@ on:
   pull_request:
     branches: [main]
 
+env:
+  NO_INTERACTION: true
+
 jobs:
   build-test:
     name: PHP ${{ matrix.php }} / ${{ matrix.os }}
@@ -34,6 +37,33 @@ jobs:
       - run: make CFLAGS="-Wall -Wextra -O2 -g"
       - run: make test TESTS="--show-diff"
 
+  examples:
+    name: Examples (run + diff against checked-in expected output)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: shivammathur/setup-php@v2
+        with:
+          php-version: '8.3'
+          tools: phpize
+
+      - name: Install BLAS / LAPACK
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libopenblas-dev liblapack-dev
+
+      - run: phpize
+      - run: ./configure --enable-numphp
+      - run: make CFLAGS="-Wall -Wextra -O2 -g"
+
+      - name: Run examples and diff against .expected
+        run: |
+          set -e
+          for f in examples/*.php; do
+            echo "=== $f ==="
+            diff <(php -d extension=./modules/numphp.so "$f") "${f%.php}.expected"
+          done
+
   valgrind:
     name: Valgrind (PHP 8.3 / Linux)
     runs-on: ubuntu-latest
@@ -59,7 +89,7 @@ jobs:
         run: make test
 
   coverage:
-    name: gcov (non-blocking until Story 2)
+    name: gcov (non-blocking — informational)
     runs-on: ubuntu-latest
     continue-on-error: true
     steps:
@@ -78,7 +108,18 @@ jobs:
       - run: ./configure --enable-numphp CFLAGS="--coverage -O0 -g" LDFLAGS="--coverage"
       - run: make
       - run: make test
-      - run: gcovr -r . --filter ndarray.c --filter ops.c --print-summary
+      - run: |
+          gcovr -r . \
+            --filter 'numphp\.c$' \
+            --filter 'ndarray\.c$' \
+            --filter 'ops\.c$' \
+            --filter 'linalg\.c$' \
+            --filter 'io\.c$' \
+            --filter 'bufferview\.c$' \
+            --filter 'nditer\.c$' \
+            --exclude '.*conftest.*' \
+            --gcov-ignore-errors=no_working_dir_found \
+            --print-summary
 
   macos:
     name: macOS

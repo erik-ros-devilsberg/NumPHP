@@ -86,7 +86,7 @@ Create a new array of the given shape filled with a single value.
 
 **Returns:** `NDArray` — every element equals `$value` cast to `$dtype`.
 
-**Throws:** `\DTypeException` if `$value` is not a number, or if it cannot be represented in the integer dtypes (e.g. `NaN` with `"int32"`).
+**Throws:** `\ShapeException` for invalid shape; `\DTypeException` for an unknown `$dtype` string. Non-numeric `$value` is coerced to a number using PHP's standard cast (e.g. `"hello"` → `0`); `NaN` cast to an integer dtype is undefined behaviour at the C level — the doc recommendation is to validate `$value` in PHP before calling `full()`.
 
 **Example:**
 
@@ -184,7 +184,7 @@ Build an `NDArray` from a (possibly nested) PHP array. Shape is inferred from th
 
 **Returns:** `NDArray` with shape matching the nested array's structure.
 
-**Throws:** `\ShapeException` if the input is ragged (e.g. `[[1,2],[3]]`). `\DTypeException` if elements are not numeric or cannot be represented in the requested `$dtype`.
+**Throws:** `\ShapeException` if the input is ragged (e.g. `[[1,2],[3]]`) or has mixed leaf-and-branch siblings at the same depth. `\DTypeException` for an unknown `$dtype` string. Non-numeric leaf values are coerced via PHP's standard cast (`"abc"` → `0`); validate inputs in PHP if you need to reject non-numeric values.
 
 **Example:**
 

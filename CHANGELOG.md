@@ -7,6 +7,26 @@ and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.
 
 ## [Unreleased]
 
+## [0.0.11] — 2026-05-01
+
+### Added — Story 13 Phase B: examples, snippet-as-test harness, gap-closure tests
+- `examples/` directory with 5 runnable scripts: `linear-regression.php`, `kmeans.php`, `image-as-array.php`, `time-series.php`, `csv-pipeline.php`. Each is deterministic, self-contained, and has a checked-in `.expected` file. New CI job `examples` diffs each script's output against `.expected` on every PR.
+- `tests/100-doc-snippets.phpt` + `tests/_helpers/snippet_runner.php` — extracts every fenced ```php block from user-facing docs, runs it, compares against the expected-output block. Catches doc-vs-implementation drift automatically.
+- 6 new phpt tests (`055-…` through `060-…`) closing audit-identified gaps: DType throw paths, IndexException for axis-OOR across squeeze/expandDims/concatenate/stack, BLAS edge shapes (k=1 matmul/dot/outer), int32 sum promotion at value-overflow scale (locks decision 9), ±inf propagation through every reduction, and the `fromArray` mixed-depth segfault regression test.
+- `docs/coverage-audit-2026-05-01.md` — written audit identifying every covered / newly-covered / deferred coverage gap.
+- `scripts/coverage.sh` — single canonical entry point for local coverage measurement; cleans up autoconf conftest leftovers and writes reports to `coverage/` (gitignored).
+- Bumped `PHP_NUMPHP_VERSION` to `0.0.11`.
+
+### Fixed
+- **`fromArray` segfault on mixed-depth siblings.** `NDArray::fromArray([[1, [99]]])` (a row containing a scalar followed by a nested array) crashed the PHP process. The rank-inference walk allowed a sibling array to extend ndim past the leaf depth a previous scalar had locked, and the subsequent fill walk dereferenced the scalar as a HashTable. Fix: `rank_locked` flag in `fromarray_walk` blocks any later array at depth `>= ndim_out` once a scalar has appeared at that depth. Now throws `\ShapeException("Ragged array: array at leaf depth")`. Found by the audit, locked by `tests/060-fromarray-mixed-depth.phpt`.
+
+### Changed
+- `.github/workflows/ci.yml` — added `examples` job; widened gcov filter from `ndarray.c + ops.c` only to all 7 C sources actually shipped by `config.m4` (so the reported number reflects the real surface). Coverage job stays `continue-on-error: true`; flipping to blocking is out of scope for this sprint.
+- `docs/api/ndarray.md` — corrected `full()` and `fromArray()` throws-list. Previously claimed `\DTypeException` for non-numeric values and NaN-cast-to-int; neither is true (the C silently coerces via PHP's standard cast, matching NumPy on NaN→int).
+
+### Notes — what this sprint was for
+Phase B is the "does the API survive realistic use" pass. Examples are the honest stress test — they exercise APIs in ways the 54 phpt tests didn't, and one of them (the `fromArray` segfault) surfaced a bug. The snippet harness is regression insurance for documentation: 75 fenced code blocks across user-facing docs now run on every PR. Phase C (benchmarks) and the eventual coverage-gate flip stay deferred — they belong to the v0.1.0 release-quality push, not the iterative pre-release we're in.
+
 ## [0.0.10] — 2026-04-29
 
 ### Added — Story 11 Phase B: FFI BufferView

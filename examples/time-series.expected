@@ -1,0 +1,10 @@
+series dtype: float64
+first 7 days: [10,12.545,13.325,11.902,9.498,8.075,8.855]
+rolling.shape = (24,)
+rolling[0]   = 10.6000
+rolling[-1]  = 15.2000
+before mutation, series[3] = 11.9017
+after first_week[3] = 999, series[3] = 999.0000
+mean(series)    = NAN
+nanmean(series) = 13.2276
+OK

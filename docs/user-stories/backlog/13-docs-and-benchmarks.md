@@ -4,8 +4,8 @@ created: 2026-04-29
 updated: 2026-05-01
 phases:
   - A: shipped 2026-05-01 — documentation prose (API ref, concepts, getting-started, cheatsheet, README)
-  - B: pending — examples + test-coverage audit
-  - C: pending — benchmarks
+  - B: shipped 2026-05-01 — 5 examples with CI diff job, doc-snippet harness, 6 gap-closure phpt tests, fromArray segfault fix
+  - C: pending — benchmarks (deferred to a release-quality sprint, not pre-release)
 ---
 
 > Part of [Epic: NumPHP](epic-numphp.md)

@@ -1,0 +1,9 @@
+loaded 15 rows × 4 cols
+column means: 5.9067 3.0600 3.8733 1.2467 
+column stds:  0.8442 0.3072 1.8277 0.8016 
+max |z-column-mean|     = 1.36e-15
+max |z-column-std - 1|  = 4.44e-16
+reloaded shape: 15x4
+reloaded dtype: float64
+max |z - reload|        = 0.00e+0
+OK
