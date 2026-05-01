@@ -1,0 +1,17 @@
+{
+  "captured_at": "2026-05-01T11:26:20Z",
+  "host": {
+    "kernel": "Linux 6.8.0-94-generic x86_64",
+    "distro": "Ubuntu 24.04.4 LTS",
+    "cpu_model": "Intel(R) Core(TM) m3-6Y30 CPU @ 0.90GHz",
+    "cpu_mhz_at_capture": "2000",
+    "cpu_count": "4",
+    "mem_total": "8022420 kB"
+  },
+  "numphp": {
+    "version": "0.0.12",
+    "linked_blas_lapack": "liblapack.so.3 -> /lib/x86_64-linux-gnu/liblapack.so.3;libopenblas.so.0 -> /lib/x86_64-linux-gnu/libopenblas.so.0;",
+    "php_version": "8.4.20"
+  },
+  "numpy": {"version": "2.4.4", "blas": "scipy-openblas", "lapack": "scipy-openblas"}
+}

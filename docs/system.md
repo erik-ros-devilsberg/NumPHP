@@ -187,6 +187,43 @@ The alternative (PECL-canonical flat root) is what most ext/ in php-src and most
 
 Matches the wider numerical-Python ecosystem (NumPy, SciPy, pandas, scikit-learn). PHP-license is deprecated for new code; MIT and BSD-3-Clause are both popular for third-party PHP extensions; BSD-3 wins on lineage — anyone porting Python data work knows what BSD-3 means and won't audit it. `LICENSE` at the repo root; README's license section points there.
 
+### 2026-05-01 — Sprint: Benchmarks (Story 13 Phase C)
+
+#### 30. Benchmark methodology — locked
+
+Every benchmark numphp publishes must follow this protocol so that
+re-runs and cross-machine comparisons are honest:
+
+- **Engines:** numphp (`hrtime(true)`) and NumPy
+  (`time.perf_counter_ns()`). Both monotonic, nanosecond-precision.
+- **Runs per scenario:** 7. Drop the slowest 1 (cold-cache outlier).
+  Report median, min, max of the surviving 6.
+- **Warm-up:** one untimed run per scenario.
+- **Fixtures:** built once before the timer starts. Per-scenario timing
+  covers the operation only — except for `fromArray` / `toArray`
+  scenarios, where the fixture *is* the subject.
+- **Determinism:** `mt_srand(42)` / `np.random.seed(42)`. Identical
+  synthetic data across runs and across engines.
+- **Per-run printed metadata:** hardware fingerprint
+  (`uname -srm`, CPU model, MHz, count, RAM total, distro), BLAS
+  variant for both engines (`ldd modules/numphp.so | grep blas/lapack`
+  for numphp; `np.show_config(mode='dicts')` for NumPy), PHP and NumPy
+  version.
+- **Output format:** Markdown table to stdout (humans), JSONL to
+  `bench/last-run/{numphp,numpy}.jsonl` (machines / future regression
+  detection).
+- **Single source of truth for scenarios:** `bench/scenarios.json`.
+  Both `run.php` and `run.py` read this file. Adding a scenario means
+  editing one file; if the new id matches an existing prefix, no
+  runner code change needed.
+- **Where benchmarks run:** locally only. Not in CI — shared runners
+  are too noisy for meaningful timing.
+
+The first run committed as `docs/benchmarks.md` is dated and
+hardware-tagged. Future runs on better hardware should append a new
+section, not overwrite the old one — the project's thesis benefits
+from a record of how the numbers move over time.
+
 ## Open Items / Caveats
 
 - ~~**LAPACK symbol portability on macOS.**~~ **Fixed in Story 10.** `config.m4` now probes both `dgetri_` (Linux convention) and `dgetri` (macOS Accelerate). `lapack_names.h` aliases symbols when the no-underscore variant is in use. macOS CI lane is now blocking.
@@ -210,3 +247,4 @@ Matches the wider numerical-Python ecosystem (NumPy, SciPy, pandas, scikit-learn
 - **2026-05-01 — `documentation-pass` (Story 13 Phase A)** delivered the release-quality documentation pass: complete API reference at `docs/api/` covering all 65 PHP-visible methods on `NDArray` / `Linalg` / `BufferView` plus the four exception classes (each entry: signature, params table, returns, throws-list, runnable example); end-to-end getting-started guide; five concept guides (dtype promotion, broadcasting, views-vs-copies, NaN policy, round-half divergence); a NumPy↔NumPHP cheatsheet (~50 rows with divergences flagged); and the repo-root `README.md`. Format choice locked as decision 25 (plain Markdown with strict per-method template — DocBook rejected as toolchain overkill); naming convention locked as decision 26 (`numphp` lowercase in code/CLI, `NumPHP` mixed-case in prose). Snippet verification harness (`/tmp/verify_docs.php`) ran 48 fenced code blocks against the live extension and surfaced an undocumented divergence: `Countable::count(NDArray)` returns total element count (matches `size()`), not leading-axis size as NumPy's `len()` does. Locked since Story 4 by `tests/013-countable.phpt` but never written down — now decision 27 and prominently documented in `docs/api/ndarray.md`, `docs/cheatsheet-numpy.md`, and the getting-started "common gotchas" section. Build clean at -Wall -Wextra; 53 phpt + 1 skipped (FFI). No code changes to source files — pure documentation sprint. **Phase A only — story 13 stays in backlog with Phase A annotation; Phase B (examples + test-coverage audit) and Phase C (benchmarks) ship in follow-up sprints. Story 14 (community + outreach) was split out from the original Story 13 prior to this sprint per user request.** Deferred to Phase B: snippet-as-test enforcement (CI-extracted code-block runner), `examples/` directory of runnable scripts, gcov gate flip.
 - **2026-05-01 — `13b-examples-and-tests` (Story 13 Phase B)** delivered the "does the API survive realistic use" pass. Five runnable example scripts in `examples/` (linear regression, k-means, image-as-array, time-series, CSV pipeline), each with a checked-in `.expected` and a new CI job that diffs them. Snippet harness (`tests/100-doc-snippets.phpt` + `tests/_helpers/snippet_runner.php`) extracts every fenced ```php block from user-facing docs and runs it on every PR — 75 doc snippets are now regression-tested automatically. 6 gap-closure phpt tests (055–060) following an audit captured in `docs/coverage-audit-2026-05-01.md`: DType throw paths, IndexException axis-OOR across squeeze/expandDims/concatenate/stack, BLAS k=1 edges, decision 9 locked at value-overflow scale, ±inf through every reduction, and the segfault regression test below. **Real bug found and fixed:** `NDArray::fromArray([[1, [99]]])` (mixed scalar/array siblings at the same depth) crashed PHP — rank-inference walk in `fromarray_walk` allowed siblings to extend ndim past the leaf depth a previous scalar had locked. Fixed via `rank_locked` flag; regression test `060-fromarray-mixed-depth.phpt`. Doc tidy: `full()` and `fromArray()` throws-lists corrected — the docs claimed `\DTypeException` for non-numeric values and NaN-cast-to-int, neither true (silent PHP cast, matching NumPy on NaN→int). gcov filter widened from `ndarray.c + ops.c` only to all 7 C sources in `config.m4`; gate stays `continue-on-error: true` — flipping is deferred to a release-quality sprint, not pre-release iteration. `scripts/coverage.sh` added as a single canonical local entry point that contains its build artefacts (cleans `a-conftest.gc*` left by autoconf probes; reports go to `coverage/`, gitignored). 60 phpt run + 1 skipped (FFI), build clean at -Wall -Wextra. Version bumped to **0.0.11**. **Phase B only — story 13 stays in backlog with Phases A+B annotated as shipped; Phase C (benchmarks) remains, deferred to a release-quality sprint.** Deferred from this sprint: gcov gate flip to blocking, CI artifact upload, ratifying the coverage threshold or snippet-test convention as architectural decisions (they're tooling, not architecture). Sprint scope was re-narrowed mid-execution after drift toward CI polish — keep Phase B about exercising the API and protecting the docs, leave release-engineering to release time.
 - **2026-05-01 — `15-project-layout` (Story 15)** mechanical layout sprint: 15 tracked C/H files moved from project root to `src/` via `git mv` so `git blame` follows. `config.m4` updated to reference `src/foo.c` paths and `PHP_ADD_INCLUDE([$ext_srcdir/src])` added so cross-file `#include "numphp.h"` keeps resolving. `LICENSE` (BSD 3-Clause) added at root — was previously a "TBD" placeholder in README. README's license section updated to point at the new file. Decisions 28 (sources under `src/`) and 29 (BSD 3-Clause) locked. No behavioural change: 60 phpt + 1 FFI-skip pass, all 5 examples still match `.expected`, doc snippet harness still green, build clean at `-Wall -Wextra`. Version bumped to **0.0.12**. Story 15 → `done/`. Net effect on root: ~20 tracked files dropped to ~6, all of them meta files a newcomer reads first.
+- **2026-05-01 — `13c-benchmarks` (Story 13 Phase C)** delivered the first reproducible numphp-vs-NumPy comparison. New `bench/` directory with mirrored runners (`run.php` + `run.py`) driven from a shared `scenarios.json`, plus `compare.py` for the Markdown table, `fingerprint.sh` for hardware/BLAS/version metadata, and `run.sh` orchestrating the lot. Methodology locked as decision 30: 7 timed runs, drop slowest, median + min + max; deterministic seed; per-scenario fixture allocation excluded except where the fixture is the subject. NumPy lives in a project-local `bench/.venv/` (gitignored) so the system Python isn't touched (PEP 668-compliant). 11 scenarios cover element-wise add/multiply, matmul (f64 + f32), `sum` along each axis, `fromArray` / `toArray` round-trip, `Linalg::solve`, `Linalg::inv`, and a sub-microsecond `slice` view-creation timer. First run committed as `docs/benchmarks.md` with the maintainer's hardware fingerprint. Headline: matmul + linalg at parity (~1.0×), interop *faster* than NumPy on numphp (`fromArray`/`toArray` ~0.35×), element-wise ~2.5× slower, axis-0 sum 15× slower (cache-unfriendly direction, no vectorised per-axis kernel yet). New smoke test `tests/061-bench-runner-smoke.phpt` invokes the runner via `proc_open` and asserts exit 0 + one JSON record per scenario — catches "runner is broken" without locking flaky timing numbers. Story 13 is now fully shipped (Phases A + B + C); story file moved to `done/`. Version bumped to **0.0.13**. **Out of scope, deliberately:** external publication (Story 14), CI integration (shared runners are too noisy), comparison against other PHP numeric libraries.

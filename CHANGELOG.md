@@ -7,6 +7,27 @@ and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.
 
 ## [Unreleased]
 
+## [0.0.13] — 2026-05-01
+
+### Added — Story 13 Phase C: benchmarks
+- `bench/` directory with the cross-engine benchmark suite. `scenarios.json` is the single source of truth; `run.php` and `run.py` are mirror runners; `compare.py` joins the JSONL output into a Markdown table; `fingerprint.sh` captures hardware/BLAS/version metadata; `run.sh` orchestrates everything.
+- 11 scenarios: element-wise add/multiply, matmul (f64 and f32), `sum` along each axis, `fromArray` / `toArray` round-trip, `Linalg::solve`, `Linalg::inv`, and a slice-view-creation timer that proves the no-copy claim is sub-microsecond.
+- First run committed as `docs/benchmarks.md` with the maintainer's hardware fingerprint (Intel m3-6Y30, OpenBLAS via apt, PHP 8.4, NumPy 2.4.4). Honest table — matmul + linalg are at parity with NumPy; interop (`fromArray`/`toArray`) is faster on numphp; element-wise + axis-0 sum are weak spots clearly flagged.
+- Methodology locked as decision 30 in `docs/system.md`: 7 timed runs per scenario, drop slowest, median + min + max; `mt_srand(42)` / `np.random.seed(42)`; `hrtime(true)` / `time.perf_counter_ns()`; per-scenario fixture allocation excluded from the timed window except where the fixture is the subject.
+- `tests/061-bench-runner-smoke.phpt` — invokes `bench/run.php --tiny` via `proc_open` and asserts exit 0 + one JSON record. Catches "the runner is broken" without locking flaky numbers.
+- `bench/.venv/` (gitignored) — project-local Python virtual environment; `run.sh` creates it automatically and `pip install`s NumPy on first run. System Python untouched (PEP 668-compliant).
+- Bumped `PHP_NUMPHP_VERSION` to `0.0.13`. Story 13 is now fully shipped (Phases A + B + C); story file moves to `done/`.
+
+### Notes — what the numbers say
+The benchmark exists to test the project's thesis ("PHP can do the data work that's currently Python-default"). On the maintainer's hardware:
+- **matmul (1024×1024)**: 1.02× — parity. Both engines call OpenBLAS dgemm. f32 matmul also at 1.00× (sgemm).
+- **Linalg::inv / solve (500×500)**: 1.01× / 0.60× — parity to faster. Same LAPACK underneath.
+- **fromArray / toArray (1000×1000)**: 0.36× / 0.34× — *faster than NumPy*. PHP array iteration beats Python list-of-list iteration on a million elements.
+- **Element-wise (5000×5000)**: ~2.5× slower. Generic nd-iterator vs NumPy's vectorised inner loops.
+- **sum axis=0 / axis=1**: 15× / 4× slower. Non-stride-1 reductions are the worst case; cache-unfriendly direction; no vectorised per-axis kernel yet.
+
+External publication (Story 14) remains out of scope; this sprint produces the artifact, not the post.
+
 ## [0.0.12] — 2026-05-01
 
 ### Changed — Story 15: project layout

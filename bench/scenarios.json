@@ -1,0 +1,98 @@
+{
+  "scenarios": [
+    {
+      "id": "elementwise-add-5000x5000-f64",
+      "label": "elementwise add",
+      "shape": [5000, 5000],
+      "dtype": "float64",
+      "category": "elementwise",
+      "description": "C = A + B"
+    },
+    {
+      "id": "elementwise-mul-5000x5000-f64",
+      "label": "elementwise multiply",
+      "shape": [5000, 5000],
+      "dtype": "float64",
+      "category": "elementwise",
+      "description": "C = A * B"
+    },
+    {
+      "id": "matmul-1024x1024-f64",
+      "label": "matmul",
+      "shape": [1024, 1024],
+      "dtype": "float64",
+      "category": "blas",
+      "description": "C = A @ B (BLAS dgemm)"
+    },
+    {
+      "id": "sum-axis0-5000x5000-f64",
+      "label": "sum axis=0",
+      "shape": [5000, 5000],
+      "dtype": "float64",
+      "category": "reduction",
+      "description": "sum along axis 0 (across rows)"
+    },
+    {
+      "id": "sum-axis1-5000x5000-f64",
+      "label": "sum axis=1",
+      "shape": [5000, 5000],
+      "dtype": "float64",
+      "category": "reduction",
+      "description": "sum along axis 1 (across cols)"
+    },
+    {
+      "id": "fromArray-1000x1000-f64",
+      "label": "fromArray",
+      "shape": [1000, 1000],
+      "dtype": "float64",
+      "category": "interop",
+      "description": "PHP nested array -> NDArray (np.array equivalent)"
+    },
+    {
+      "id": "toArray-1000x1000-f64",
+      "label": "toArray",
+      "shape": [1000, 1000],
+      "dtype": "float64",
+      "category": "interop",
+      "description": "NDArray -> PHP nested array (.tolist() equivalent)"
+    },
+    {
+      "id": "linalg-solve-500x500-f64",
+      "label": "Linalg::solve",
+      "shape": [500, 500],
+      "dtype": "float64",
+      "category": "lapack",
+      "description": "solve A x = b for a (500,500) A and (500,) b"
+    },
+    {
+      "id": "linalg-inv-500x500-f64",
+      "label": "Linalg::inv",
+      "shape": [500, 500],
+      "dtype": "float64",
+      "category": "lapack",
+      "description": "matrix inverse"
+    },
+    {
+      "id": "slice-view-5000x5000-f64",
+      "label": "slice (view creation)",
+      "shape": [5000, 5000],
+      "dtype": "float64",
+      "category": "view",
+      "description": "create a [500..4500] row-slice view (should be O(1))"
+    },
+    {
+      "id": "matmul-1024x1024-f32",
+      "label": "matmul f32",
+      "shape": [1024, 1024],
+      "dtype": "float32",
+      "category": "blas",
+      "description": "C = A @ B with float32 (BLAS sgemm)"
+    }
+  ],
+  "methodology": {
+    "runs": 7,
+    "drop_slowest": 1,
+    "warmup_runs": 1,
+    "rng_seed": 42
+  }
+}

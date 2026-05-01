@@ -38,6 +38,9 @@ modules/
 *.gcov
 coverage/
 
+# Benchmark venv (Python NumPy lives here, not on the system)
+bench/.venv/
+
 # Test artifacts
 tests/*.diff
 tests/*.exp
