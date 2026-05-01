@@ -108,6 +108,11 @@ Conventions:
 | `a.argmin()`, `a.argmax()` | `$a->argmin()`, `$a->argmax()` | Always int64. |
 | `np.nansum(a)` | `$a->nansum()` | NaN-aware variants are instance methods in NumPHP. |
 | `np.nanmean(a)` | `$a->nanmean()` | |
+| `np.cumsum(a)` | `$a->cumsum()` | `$axis = null` flattens. |
+| `np.cumsum(a, axis=0)` | `$a->cumsum(0)` | |
+| `np.cumprod(a)` | `$a->cumprod()` | **Diverges**: integer input promotes to `int64` (NumPy preserves input dtype). |
+| `np.nancumsum(a)` | `$a->nancumsum()` | NaN treated as 0. |
+| `np.nancumprod(a)` | `$a->nancumprod()` | NaN treated as 1. |
 
 ---
 

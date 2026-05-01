@@ -78,7 +78,7 @@ This is wider than the elementwise table because BLAS has no integer routines. I
 
 ## Reductions: a separate table
 
-Reduction ops (`sum`, `mean`, `var`, `std`, `argmin`, `argmax`) have their own dtype rules — these are not in the binary-op promotion table.
+Reduction ops (`sum`, `mean`, `var`, `std`, `argmin`, `argmax`, `cumsum`, `cumprod`) have their own dtype rules — these are not in the binary-op promotion table.
 
 | Op | int input | f32 input | f64 input |
 |----|-----------|-----------|-----------|
@@ -86,8 +86,11 @@ Reduction ops (`sum`, `mean`, `var`, `std`, `argmin`, `argmax`) have their own d
 | `mean`, `var`, `std` | f64 | f32 | f64 |
 | `min`, `max` | preserve | preserve | preserve |
 | `argmin`, `argmax` | int64 | int64 | int64 |
+| `cumsum`, `cumprod` | int64 | f32 | f64 |
 
 `sum` of int promotes to `int64` to avoid silent overflow when accumulating an `int32` input. `argmin` / `argmax` always return `int64` regardless of input dtype. See [decision 9](../system.md) for the full reasoning.
+
+`cumsum` / `cumprod` follow the same int-promotion logic. **`cumprod` on integer input is a deliberate divergence from NumPy** — NumPy preserves the input dtype, NumPHP returns `int64` for consistency with `cumsum` and `sum`. See [decision 31](../system.md).
 
 ---
 

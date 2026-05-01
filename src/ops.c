@@ -581,6 +581,211 @@ numphp_ndarray *numphp_reduce(numphp_ndarray *src, numphp_reduce_op op,
 }
 
 /* ============================================================================
+ * Cumulative reductions — cumsum / cumprod / nancumsum / nancumprod
+ * ----------------------------------------------------------------------------
+ * Output dtype rules (locked by docs/system.md decision 31):
+ *   int32 / int64 → int64;  float32 → float32;  float64 → float64.
+ * `cumprod` on int promotes to int64 — divergence from NumPy, motivated by the
+ * same silent-overflow concern that drove decision 9 for `sum`.
+ *
+ * Layout: the public entry point promotes the input to a contiguous buffer of
+ * the output dtype (via numphp_ensure_contig_dtype), allocates a same-shape
+ * output owner, then dispatches to a typed inner-loop helper for each line
+ * along the chosen axis. For `axis = null` (has_axis = 0), input is flattened
+ * and the output is 1-D of size src->size — a single line.
+ * ========================================================================== */
+
+#define CUMSUM_IDENTITY  0.0
+#define CUMPROD_IDENTITY 1.0
+
+static inline double cum_combine_f64(double acc, double v, numphp_cumulative_op op)
+{
+    return (op == NUMPHP_CUM_SUM) ? (acc + v) : (acc * v);
+}
+
+static void cum_line_f64(const double *src, double *dst,
+                         zend_long n, zend_long src_step, zend_long dst_step,
+                         numphp_cumulative_op op, int skip_nan)
+{
+    double acc = (op == NUMPHP_CUM_SUM) ? CUMSUM_IDENTITY : CUMPROD_IDENTITY;
+    for (zend_long i = 0; i < n; i++) {
+        double v = src[i * src_step];
+        if (skip_nan && isnan(v)) {
+            /* treat as identity — leave acc unchanged */
+        } else {
+            acc = cum_combine_f64(acc, v, op);
+        }
+        dst[i * dst_step] = acc;
+    }
+}
+
+static inline float cum_combine_f32(float acc, float v, numphp_cumulative_op op)
+{
+    return (op == NUMPHP_CUM_SUM) ? (acc + v) : (acc * v);
+}
+
+static void cum_line_f32(const float *src, float *dst,
+                         zend_long n, zend_long src_step, zend_long dst_step,
+                         numphp_cumulative_op op, int skip_nan)
+{
+    float acc = (op == NUMPHP_CUM_SUM) ? 0.0f : 1.0f;
+    for (zend_long i = 0; i < n; i++) {
+        float v = src[i * src_step];
+        if (skip_nan && isnan(v)) {
+            /* identity */
+        } else {
+            acc = cum_combine_f32(acc, v, op);
+        }
+        dst[i * dst_step] = acc;
+    }
+}
+
+static void cum_line_i64(const int64_t *src, int64_t *dst,
+                         zend_long n, zend_long src_step, zend_long dst_step,
+                         numphp_cumulative_op op)
+{
+    int64_t acc = (op == NUMPHP_CUM_SUM) ? 0 : 1;
+    for (zend_long i = 0; i < n; i++) {
+        int64_t v = src[i * src_step];
+        acc = (op == NUMPHP_CUM_SUM) ? (acc + v) : (acc * v);
+        dst[i * dst_step] = acc;
+    }
+}
+
+static numphp_dtype cumulative_out_dtype(numphp_dtype in)
+{
+    if (in == NUMPHP_INT32 || in == NUMPHP_INT64) return NUMPHP_INT64;
+    return in;
+}
+
+numphp_ndarray *numphp_cumulative(numphp_ndarray *src, numphp_cumulative_op op,
+                                  int has_axis, int axis, int skip_nan)
+{
+    numphp_dtype out_dt = cumulative_out_dtype(src->dtype);
+
+    /* Integer dtypes have no NaN — NaN-skip is a no-op. Match the alias
+     * convention used by the regular reductions. */
+    int eff_skip = skip_nan;
+    if (out_dt == NUMPHP_INT64) eff_skip = 0;
+
+    /* Normalise / bounds-check axis. Allowed range matches reductions. */
+    int red = 0;
+    if (has_axis) {
+        red = axis;
+        if (red < 0) red += src->ndim;
+        if (src->ndim == 0 || red < 0 || red >= src->ndim) {
+            zend_throw_exception_ex(numphp_shape_exception_ce, 0,
+                "axis %d out of range for ndim %d", axis, src->ndim);
+            return NULL;
+        }
+    }
+
+    /* For axis=null (flatten): output is 1-D of length src->size. We get a
+     * contiguous, dtype-promoted view via ensure_contig_dtype and run a single
+     * line. */
+    if (!has_axis) {
+        int owned = 0;
+        numphp_ndarray *contig = numphp_ensure_contig_dtype(src, out_dt, &owned);
+        if (!contig) return NULL;
+
+        zend_long shape[1] = { src->size };
+        numphp_ndarray *out = numphp_ndarray_alloc_owner(out_dt, 1, shape);
+        if (src->size > 0) {
+            char *sp = (char *)contig->buffer->data + contig->offset;
+            char *op_ptr = (char *)out->buffer->data;
+            switch (out_dt) {
+                case NUMPHP_FLOAT64:
+                    cum_line_f64((const double *)sp, (double *)op_ptr,
+                                 src->size, 1, 1, op, eff_skip);
+                    break;
+                case NUMPHP_FLOAT32:
+                    cum_line_f32((const float *)sp, (float *)op_ptr,
+                                 src->size, 1, 1, op, eff_skip);
+                    break;
+                case NUMPHP_INT64:
+                    cum_line_i64((const int64_t *)sp, (int64_t *)op_ptr,
+                                 src->size, 1, 1, op);
+                    break;
+                default:
+                    /* unreachable — out_dt restricted by cumulative_out_dtype */
+                    break;
+            }
+        }
+        if (owned) numphp_ndarray_free(contig);
+        return out;
+    }
+
+    /* ===== axis cumulation ===== */
+    int in_ndim = src->ndim;
+    zend_long axis_n = src->shape[red];
+
+    /* Promote / contiguify so we can index by element-stride in items. */
+    int owned = 0;
+    numphp_ndarray *contig = numphp_ensure_contig_dtype(src, out_dt, &owned);
+    if (!contig) return NULL;
+
+    /* Allocate output of input's shape (no shape change for axis cumulation). */
+    numphp_ndarray *out = numphp_ndarray_alloc_owner(out_dt, in_ndim, src->shape);
+
+    /* Empty input → output also has size 0 (same shape); no data to write. */
+    if (src->size == 0 || axis_n == 0) {
+        if (owned) numphp_ndarray_free(contig);
+        return out;
+    }
+
+    char *src_base = (char *)contig->buffer->data + contig->offset;
+    char *out_base = (char *)out->buffer->data;
+    zend_long itemsize = out->itemsize;
+
+    /* Both contig and out are C-contiguous of out_dt; strides[red] / itemsize
+     * gives the element-step along the cumulating axis. */
+    zend_long src_step_items = contig->strides[red] / itemsize;
+    zend_long out_step_items = out->strides[red] / itemsize;
+
+    zend_long outer_total = src->size / axis_n;
+    zend_long idx[NUMPHP_MAX_NDIM] = {0};
+
+    for (zend_long n = 0; n < outer_total; n++) {
+        zend_long src_off = 0;
+        zend_long dst_off = 0;
+        for (int i = 0; i < in_ndim; i++) {
+            if (i == red) continue;
+            src_off += idx[i] * contig->strides[i];
+            dst_off += idx[i] * out->strides[i];
+        }
+        const char *sp = src_base + src_off;
+        char *op_ptr = out_base + dst_off;
+
+        switch (out_dt) {
+            case NUMPHP_FLOAT64:
+                cum_line_f64((const double *)sp, (double *)op_ptr,
+                             axis_n, src_step_items, out_step_items, op, eff_skip);
+                break;
+            case NUMPHP_FLOAT32:
+                cum_line_f32((const float *)sp, (float *)op_ptr,
+                             axis_n, src_step_items, out_step_items, op, eff_skip);
+                break;
+            case NUMPHP_INT64:
+                cum_line_i64((const int64_t *)sp, (int64_t *)op_ptr,
+                             axis_n, src_step_items, out_step_items, op);
+                break;
+            default:
+                break;
+        }
+
+        /* Increment outer indices, skipping the cumulating axis. */
+        for (int i = in_ndim - 1; i >= 0; i--) {
+            if (i == red) continue;
+            if (++idx[i] < src->shape[i]) break;
+            idx[i] = 0;
+        }
+    }
+
+    if (owned) numphp_ndarray_free(contig);
+    return out;
+}
+
+/* ============================================================================
  * Element-wise math
  * ============================================================================ */
 

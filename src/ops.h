@@ -29,6 +29,25 @@ typedef enum {
 numphp_ndarray *numphp_reduce(numphp_ndarray *src, numphp_reduce_op op,
                               int has_axis, int axis, int keepdims, int ddof, int skip_nan);
 
+/* Cumulative reductions — running sum / running product along an axis. */
+typedef enum {
+    NUMPHP_CUM_SUM = 0,
+    NUMPHP_CUM_PROD,
+} numphp_cumulative_op;
+
+/* Cumulate `src` along `axis` (or globally if has_axis = 0).
+ *   has_axis = 0  → flatten input, output is 1-D of length src->size
+ *   has_axis = 1  → cumulate along `axis`, output shape == input shape
+ *   skip_nan      → NaN-aware variant (treat NaN as identity: 0 for sum, 1 for prod)
+ *
+ * Output dtype rules (locked by docs/system.md decision 31):
+ *   int32 / int64 → int64; float32 → float32; float64 → float64
+ *
+ * Returns a fresh owner ndarray on success, NULL with an exception on error.
+ */
+numphp_ndarray *numphp_cumulative(numphp_ndarray *src, numphp_cumulative_op op,
+                                  int has_axis, int axis, int skip_nan);
+
 /* Element-wise math ops. All return a freshly allocated C-contiguous owner. */
 typedef enum {
     NUMPHP_MATH_SQRT = 0,

@@ -1057,6 +1057,85 @@ NAN
 
 ---
 
+## Cumulative reductions
+
+Running totals along an axis. Output shape matches input when `$axis` is given; flattened to 1-D of size `size()` when `$axis === null`.
+
+Output dtype follows [decision 31](../system.md): integer input promotes to `int64` (avoids silent overflow on `int32` accumulation, consistent with `sum`); `float32` and `float64` are preserved. **`cumprod` on integer input diverges from NumPy** — NumPy preserves the input dtype, NumPHP promotes to `int64`. Documented and locked.
+
+### NDArray::cumsum(): NDArray
+
+**Signature:** `public function cumsum(?int $axis = null): NDArray`
+
+**Parameters:**
+
+| Name | Type | Default | Description |
+|------|------|---------|-------------|
+| `$axis` | `?int` | `null` | If `null`, flatten then cumulate (output is 1-D). Otherwise cumulate along that axis. Negative indices count from the end. |
+
+**Returns:** `NDArray` — same shape as input when `$axis` is an int, otherwise 1-D of length `size()`.
+
+**Throws:** `\ShapeException` if `$axis` is out of range.
+
+**Example:**
+
+```php
+$a = NDArray::fromArray([1.0, 2.0, 3.0, 4.0]);
+print_r($a->cumsum()->toArray());           // [1, 3, 6, 10]
+
+$m = NDArray::fromArray([[1, 2, 3], [4, 5, 6]]);
+print_r($m->cumsum(1)->toArray());          // [[1, 3, 6], [4, 9, 15]]
+```
+
+```
+Array ( [0] => 1 [1] => 3 [2] => 6 [3] => 10 )
+Array ( [0] => Array ( [0] => 1 [1] => 3 [2] => 6 ) [1] => Array ( [0] => 4 [1] => 9 [2] => 15 ) )
+```
+
+---
+
+### NDArray::cumprod(): NDArray
+
+**Signature:** `public function cumprod(?int $axis = null): NDArray`
+
+Same parameters and shape rules as `cumsum`, with multiplication instead of addition.
+
+**Note:** integer input promotes to `int64` (NumPy preserves input dtype here — see [decision 31](../system.md)).
+
+**Example:**
+
+```php
+$a = NDArray::fromArray([1, 2, 3, 4]);
+print_r($a->cumprod()->toArray());          // [1, 2, 6, 24]
+```
+
+```
+Array ( [0] => 1 [1] => 2 [2] => 6 [3] => 24 )
+```
+
+---
+
+### NaN-aware variants — nancumsum, nancumprod
+
+`nancumsum` / `nancumprod` skip NaN inputs by treating them as the additive (0) / multiplicative (1) identity. Default `cumsum`/`cumprod` propagate NaN — once a NaN enters the running accumulator, every subsequent output element along the axis is NaN.
+
+| All-NaN slice | Result |
+|---|---|
+| `nancumsum` | all `0` |
+| `nancumprod` | all `1` |
+
+For integer dtypes, the nan-variants are aliases of the plain forms.
+
+**Example:**
+
+```php
+$x = NDArray::fromArray([1.0, NAN, 3.0, 4.0]);
+print_r($x->cumsum()->toArray());           // [1, NAN, NAN, NAN]
+print_r($x->nancumsum()->toArray());        // [1, 1, 4, 8]
+```
+
+---
+
 ## Sort
 
 ### NDArray::sort(): NDArray

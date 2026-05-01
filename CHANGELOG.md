@@ -7,6 +7,22 @@ and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.
 
 ## [Unreleased]
 
+## [0.0.17] — 2026-05-01
+
+### Added — Story 18: cumulative reductions
+Four new instance methods on `NDArray`: `cumsum`, `cumprod`, `nancumsum`, `nancumprod`. Single new kernel `numphp_cumulative` in `ops.c`, patterned on `numphp_reduce`; thin `do_cumulative_method` wrapper in `ndarray.c`.
+
+- `NDArray::cumsum(?int $axis = null): NDArray` — running sum. `null` flattens then cumulates (1-D output of length `size()`); integer axis cumulates along that axis with output shape matching input. Negative axis allowed; out-of-range throws `\ShapeException`.
+- `NDArray::cumprod(?int $axis = null): NDArray` — running product. Same shape rules as `cumsum`.
+- `nancumsum` / `nancumprod` — NaN-aware variants; treat NaN as additive (0) / multiplicative (1) identity. All-NaN slice → all 0 / all 1 (no exception). Integer dtypes alias the plain forms.
+- Output dtype: `int32` and `int64` → `int64`; `float32` → `float32`; `float64` → `float64`. **Decision 31** locks the divergence from NumPy on `cumprod` for integer input — NumPy preserves the input dtype, NumPHP promotes to `int64` for consistency with `sum` / `cumsum` (decision 9) and to avoid silent overflow on accumulating products.
+- 2 new phpt tests (`062-cumulative.phpt`, `063-cumulative-nan.phpt`) cover all four numeric dtypes × axis=null/integer/negative × NaN propagation × all-NaN slice × 3-D strided walk × empty input × dtype-promotion table. 63/63 + 1 skipped (FFI). Build clean at `-Wall -Wextra`.
+- Docs: `docs/api/ndarray.md` (new "Cumulative reductions" section + nan-variants subsection), `docs/concepts/dtypes.md` (reductions table extended + decision 31 footnote), `docs/cheatsheet-numpy.md` (5 new rows including the `cumprod` divergence flag).
+- Bumped `PHP_NUMPHP_VERSION` to `0.0.17`.
+
+### Notes
+Out of scope, deliberately: multi-axis cumulation (NumPy doesn't either), Kahan/Neumaier compensated summation (default paths everywhere in NumPHP use simple fold; revisit on accuracy bug), in-place variants (consistent with the broader "no in-place ops yet" stance), and `bool` input handling (deferred to Story 17 in a follow-up sprint — once `bool` lands as a dtype, `bool` cumulative input will promote to `int64` per the same table).
+
 ## [0.0.14] — 2026-05-01
 
 ### Performance — Story 16: fastpath optimisations

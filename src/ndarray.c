@@ -2141,6 +2141,37 @@ PHP_METHOD(NDArray, nanstd)     { do_reduce_method(INTERNAL_FUNCTION_PARAM_PASST
 PHP_METHOD(NDArray, nanargmin)  { do_reduce_method(INTERNAL_FUNCTION_PARAM_PASSTHRU, NUMPHP_REDUCE_ARGMIN, 1); }
 PHP_METHOD(NDArray, nanargmax)  { do_reduce_method(INTERNAL_FUNCTION_PARAM_PASSTHRU, NUMPHP_REDUCE_ARGMAX, 1); }
 
+/* ===== cumulative reductions ===== */
+
+static void do_cumulative_method(INTERNAL_FUNCTION_PARAMETERS, numphp_cumulative_op op, int skip_nan)
+{
+    zval *axis_zv = NULL;
+    ZEND_PARSE_PARAMETERS_START(0, 1)
+        Z_PARAM_OPTIONAL
+        Z_PARAM_ZVAL(axis_zv)
+    ZEND_PARSE_PARAMETERS_END();
+
+    int has_axis = 0;
+    int axis = 0;
+    if (axis_zv && Z_TYPE_P(axis_zv) != IS_NULL) {
+        if (Z_TYPE_P(axis_zv) != IS_LONG) {
+            zend_throw_exception(numphp_shape_exception_ce, "axis must be int or null", 0);
+            RETURN_THROWS();
+        }
+        has_axis = 1;
+        axis = (int)Z_LVAL_P(axis_zv);
+    }
+
+    numphp_ndarray *res = numphp_cumulative(Z_NDARRAY_P(ZEND_THIS), op, has_axis, axis, skip_nan);
+    if (!res) RETURN_THROWS();
+    numphp_zval_wrap_ndarray(return_value, res);
+}
+
+PHP_METHOD(NDArray, cumsum)     { do_cumulative_method(INTERNAL_FUNCTION_PARAM_PASSTHRU, NUMPHP_CUM_SUM,  0); }
+PHP_METHOD(NDArray, cumprod)    { do_cumulative_method(INTERNAL_FUNCTION_PARAM_PASSTHRU, NUMPHP_CUM_PROD, 0); }
+PHP_METHOD(NDArray, nancumsum)  { do_cumulative_method(INTERNAL_FUNCTION_PARAM_PASSTHRU, NUMPHP_CUM_SUM,  1); }
+PHP_METHOD(NDArray, nancumprod) { do_cumulative_method(INTERNAL_FUNCTION_PARAM_PASSTHRU, NUMPHP_CUM_PROD, 1); }
+
 /* ===== element-wise math ===== */
 
 static void do_unary_method(INTERNAL_FUNCTION_PARAMETERS, numphp_math_op op)
@@ -2462,6 +2493,11 @@ ZEND_BEGIN_ARG_WITH_RETURN_TYPE_INFO_EX(arginfo_var_std, 0, 0, IS_MIXED, 0)
     ZEND_ARG_TYPE_INFO_WITH_DEFAULT_VALUE(0, ddof, IS_LONG, 0, "0")
 ZEND_END_ARG_INFO()
 
+/* cumsum / cumprod / nancumsum / nancumprod: ($axis = null) → NDArray */
+ZEND_BEGIN_ARG_WITH_RETURN_OBJ_INFO_EX(arginfo_cumulative, 0, 0, NDArray, 0)
+    ZEND_ARG_TYPE_INFO_WITH_DEFAULT_VALUE(0, axis, IS_LONG, 1, "null")
+ZEND_END_ARG_INFO()
+
 ZEND_BEGIN_ARG_WITH_RETURN_OBJ_INFO_EX(arginfo_unary, 0, 0, NDArray, 0)
 ZEND_END_ARG_INFO()
 
@@ -2562,6 +2598,11 @@ static const zend_function_entry numphp_ndarray_methods[] = {
     PHP_ME(NDArray, nanstd,    arginfo_var_std, ZEND_ACC_PUBLIC)
     PHP_ME(NDArray, nanargmin, arginfo_reduce,  ZEND_ACC_PUBLIC)
     PHP_ME(NDArray, nanargmax, arginfo_reduce,  ZEND_ACC_PUBLIC)
+
+    PHP_ME(NDArray, cumsum,     arginfo_cumulative, ZEND_ACC_PUBLIC)
+    PHP_ME(NDArray, cumprod,    arginfo_cumulative, ZEND_ACC_PUBLIC)
+    PHP_ME(NDArray, nancumsum,  arginfo_cumulative, ZEND_ACC_PUBLIC)
+    PHP_ME(NDArray, nancumprod, arginfo_cumulative, ZEND_ACC_PUBLIC)
 
     /* element-wise math (the trailing-underscore C names map to clean PHP names) */
     PHP_MALIAS(NDArray, sqrt,  sqrt_,  arginfo_unary, ZEND_ACC_PUBLIC)
