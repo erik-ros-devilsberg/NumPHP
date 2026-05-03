@@ -1,0 +1,28 @@
+# LeakSanitizer suppressions for numphp's `sanitizers` CI job and
+# scripts/sanitize.sh. Every entry is a known PHP / glibc startup leak
+# that PHP's normal shutdown does NOT reclaim — these are not numphp
+# bugs. Format: `leak:<symbol-substring>` matches any frame in the leak
+# trace.
+#
+# Reject any addition that names a numphp symbol (numphp_*, zim_NDArray_*,
+# zim_Linalg_*, zim_BufferView_*) — those are real bugs, not noise.
+
+# PHP module-init allocations: extension table entries, INI hash, etc.
+# Each module's MINIT can populate engine-global structures that PHP
+# doesn't free at shutdown.
+leak:zend_startup_module_ex
+
+# PHP extension loader: dlopen path retains the .so handle and a small
+# bookkeeping struct; intentional, never freed.
+leak:php_load_shlib
+
+# Library .init constructors fired at dlopen time. Random C-library
+# global state (libssl/libcrypto/etc.) installs atexit handlers and
+# intentionally outlives shutdown.
+leak:dl_open_worker
+leak:_dl_init
+
+# getaddrinfo machinery: glibc caches resolver state when called from
+# PHP module init. Reachable forever via glibc internals.
+leak:getaddrinfo
+leak:gaih_inet

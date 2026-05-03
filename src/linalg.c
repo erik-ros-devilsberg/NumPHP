@@ -23,6 +23,11 @@
 #include <string.h>
 #include <stdlib.h>
 
+/* PHP_METHOD()-generated functions (zim_Linalg_*) are referenced only via the
+ * zend_function_entry table by function pointer. See decision 36. */
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wmissing-prototypes"
+
 zend_class_entry *numphp_linalg_ce;
 
 /* ============================================================================
@@ -999,3 +1004,5 @@ void numphp_register_linalg_class(void)
     numphp_linalg_ce = zend_register_internal_class(&ce);
     numphp_linalg_ce->ce_flags |= ZEND_ACC_FINAL;
 }
+
+#pragma GCC diagnostic pop

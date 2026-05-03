@@ -303,12 +303,122 @@ NumPy cheatsheet. Locked by `tests/062-cumulative.phpt`
 (asserts `dtype()` returns `int64` for both `cumsum` and
 `cumprod` on `int32` / `int64` inputs).
 
+### 2026-05-03 — Sprint: Build Quality Hardening — Compiler Flags (Story 19, Phase A)
+
+#### 36. Canonical compiler warning flag set
+
+NumPHP builds with:
+
+```
+-Wall -Wextra -Werror -Wshadow -Wstrict-prototypes -Wmissing-prototypes
+```
+
+(plus `-O2 -g` for release CI, `-O0 -g` for valgrind / coverage / sanitizer
+builds.) Applied uniformly across every CI job (`build-test` matrix,
+`examples`, `valgrind`, `macos`) and documented as the local build
+expectation in `docs/RESUME.md`.
+
+**Why:** the prior `-Wall -Wextra` baseline accepted warnings (1
+`-Wunused-parameter` was firing silently on `main`); without `-Werror`
+new warnings could accumulate without surfacing. The four added
+warning flags catch real bug shapes — shadowed locals (`-Wshadow`), bare
+`()` argument lists (`-Wstrict-prototypes`), undeclared cross-TU
+helpers (`-Wmissing-prototypes`) — at no false-positive cost in our
+codebase. `-Werror` makes the build fail-fast on regression.
+
+**Excluded deliberately:**
+
+- `-Wpedantic` — Zend macros (`PHP_FUNCTION`, arginfo, method tables)
+  expand to non-ISO-C constructs we can't fix; suppressing per-include
+  is more mess than it's worth on a PHP extension.
+- `-Wconversion` — too noisy for numerical code (every
+  `size_t ↔ int` and integer narrowing fires).
+- `-Wcast-align`, `-Wnull-dereference`, `-Wdouble-promotion` —
+  deferred to a future sprint. Each likely requires a project-wide
+  source-pattern decision (alignment policy / null-check policy /
+  f32 literal suffix policy) that fits its own focused sprint.
+
+**Per-TU suppressions accepted:** `#pragma GCC diagnostic ignored
+"-Wmissing-prototypes"` wraps the file-scope regions of
+`src/numphp.c`, `src/ndarray.c`, `src/linalg.c`, `src/bufferview.c`
+that contain Zend-macro-generated functions (`PHP_METHOD`,
+`PHP_MINIT_FUNCTION`, `PHP_MINFO_FUNCTION`, `ZEND_GET_MODULE`).
+These functions are referenced only via the `zend_function_entry`
+table by function pointer; we can't make them `static` (the table
+takes their address) and they don't belong in a header (each is
+internal to its TU). The pragma is file-scoped rather than
+per-function to keep diff churn low — risk: a future bare
+non-static helper in the same TU would slip through. Acceptable
+given we have none today and code review catches it.
+
+**Coverage job exemption:** the `coverage` CI job runs with the
+warning flags but **without** `-Werror` because `--coverage`
+instrumentation can introduce diagnostics that don't reflect source
+defects. The job is `continue-on-error: true` anyway (informational,
+not blocking).
+
+**How to apply:** keep this flag set in every `make CFLAGS=...` call
+(local + CI). When adding new files or refactoring, prefer making
+helpers `static` over adding to a header. The pragma blocks should
+remain narrowly scoped to the Zend-macro regions.
+
+### 2026-05-03 — Sprint: Build Quality Hardening — ASan + UBSan (Story 19, Phase B)
+
+#### 37. Sanitizer policy: ASan + UBSan in CI, leak detection deferred
+
+NumPHP runs the phpt suite under
+`-fsanitize=address,undefined -fno-omit-frame-pointer -O1 -g` in
+a dedicated CI job (`sanitizers`) on every push and PR. Compiler
+is gcc (system default) — clang's "reference compiler" advantage
+is cosmetic at our scale and dropping it removes a CI install
+step. `LD_PRELOAD` ensures libasan + libubsan load before libc
+malloc (the extension is `dlopen`'d into PHP after startup, so
+without preload ASan complains "runtime does not come first in
+initial library list"). `USE_ZEND_ALLOC=0` disables PHP's pool
+allocator so ASan can see every alloc.
+
+**Leak detection (LSan) is ON** via
+`ASAN_OPTIONS=detect_leaks=1` plus
+`LSAN_OPTIONS=suppressions=lsan.supp`. The suppression file at
+the repo root masks PHP-internal startup leaks (`getaddrinfo`,
+`dlopen` `_init` constructors, `zend_startup_module_ex`-driven
+module-table allocations) — PHP intentionally skips final
+cleanup at process shutdown for CLI speed; these aren't our
+code. Every entry in `lsan.supp` carries a one-line `#` comment
+explaining the rationale, and the file rejects any suppression
+on a numphp symbol.
+
+ASan, UBSan, and LSan together catch heap/stack overflows,
+use-after-free, double-free, signed integer overflow, alignment
+violations, shifts past type width, refcount leaks (now that
+`do_operation`'s compound-assign bug is fixed — see sprint
+19b-fix), and other UB.
+
+**Local convenience:**
+
+- `scripts/sanitize.sh` — full local sanitizer build + phpt run.
+  Mirrors the CI job exactly. Recommended when active work
+  touches refcounts, buffer arithmetic, or error paths.
+- `scripts/memcheck.sh` — full local valgrind run via
+  `run-tests.php -m`. Fails fast if valgrind isn't installed
+  (prints `sudo apt install valgrind`). Recommended at sprint
+  boundaries — too slow for every-build use.
+
+Neither script is a mandatory toolchain — CI is the gate.
+
+**How to apply:** new code that touches buffer pointer arithmetic
+or zval refcounting should be exercised through `scripts/sanitize.sh`
+locally before push. The existing valgrind CI job (`-O0 -g` build,
+`TEST_PHP_ARGS=-m`) stays in place — different bug-shapes, no
+overlap with ASan worth eliminating.
+
 ## Open Items / Caveats
 
 - ~~**LAPACK symbol portability on macOS.**~~ **Fixed in Story 10.** `config.m4` now probes both `dgetri_` (Linux convention) and `dgetri` (macOS Accelerate). `lapack_names.h` aliases symbols when the no-underscore variant is in use. macOS CI lane is now blocking.
 - **gcov coverage gate parked, filter widened in Story 13 Phase B.** Job stays `continue-on-error: true` for now — the gate is informational, not blocking. Filter widened from `ndarray.c + ops.c` only to all 7 C source files in `config.m4`, so the reported number reflects the real surface. Measured 86% lines at the time of widening. Flipping to blocking is deferred to a later sprint when v0.1.0 release-quality scrutiny is on the table.
 - **Nothing depends on `nditer.c` yet.** The empty TU is listed in `PHP_NEW_EXTENSION` so the build graph stays stable. If a header declaration is added without a definition the linker fails loud — that is the intended canary.
 - **Transpose-trick zero-copy deferral.** `inv` and `det` could skip the F-contig copy via the column-major reinterpretation trick (row-major bytes interpreted as column-major = transpose; `inv(A^T) = inv(A)^T` and `det(A^T) = det(A)`). `solve`, `svd`, `eig` cannot use the trick safely. v1 ships uniform copy for simplicity; revisit if profiling shows the copy is hot.
+- ~~**`do_operation` compound-assign refcount leak.**~~ **Fixed in sprint 19b-fix (decision 37 amendment).** `$c += $b` was leaking 48 bytes per call — PHP's `ZEND_ASSIGN_OP` opcode dispatches as `add_function(&$c, &$c, &$b)`, so `result == op1` in pointer terms; our handler overwrote `result` via `object_init_ex` without releasing prior content. Four prior fix attempts (within sprint 19b and 19b-fix) failed because they used `IS_OBJECT(result)` as the discriminator — wrong signal, since PHP reuses VM tmp slots without clearing type-info. Investigation surfaced the GMP idiom (`ext/gmp/gmp.c:480-496`): pointer-equality discriminator `result == op1`, snapshot+redirect, dtor the snapshot after success. 6-line outer wrapper around the existing `do_binary_op_core`, no inner-kernel changes. Locked by sanitizer CI now running with `detect_leaks=1` + `lsan.supp`.
 - **Story 11 Phase C (Arrow IPC) deferred post-1.0.** Phases A + B shipped. Phase C blocked on an unresolved install-ergonomics tradeoff: libarrow C++ is not in Ubuntu 24.04 universe, and Apache's APT repo install path failed mid-setup (doubled `ubuntu` in URI). The cleaner alternative is vendoring nanoarrow (single-file C, permissive license, IPC-scoped), but no user has yet asked for Arrow interop — speculative work. Revisit after Stories 12 (PECL) and 13 (docs) ship; by then real interop demand may have surfaced and the upstream landscape (Ubuntu inheritance, nanoarrow maturity) will have moved. User story stays in `docs/user-stories/backlog/11-interoperability.md`.
 
 ## Sprint Outcomes
@@ -329,4 +439,8 @@ NumPy cheatsheet. Locked by `tests/062-cumulative.phpt`
 - **2026-05-01 — `13c-benchmarks` (Story 13 Phase C)** delivered the first reproducible numphp-vs-NumPy comparison. New `bench/` directory with mirrored runners (`run.php` + `run.py`) driven from a shared `scenarios.json`, plus `compare.py` for the Markdown table, `fingerprint.sh` for hardware/BLAS/version metadata, and `run.sh` orchestrating the lot. Methodology locked as decision 30: 7 timed runs, drop slowest, median + min + max; deterministic seed; per-scenario fixture allocation excluded except where the fixture is the subject. NumPy lives in a project-local `bench/.venv/` (gitignored) so the system Python isn't touched (PEP 668-compliant). 11 scenarios cover element-wise add/multiply, matmul (f64 + f32), `sum` along each axis, `fromArray` / `toArray` round-trip, `Linalg::solve`, `Linalg::inv`, and a sub-microsecond `slice` view-creation timer. First run committed as `docs/benchmarks.md` with the maintainer's hardware fingerprint. Headline: matmul + linalg at parity (~1.0×), interop *faster* than NumPy on numphp (`fromArray`/`toArray` ~0.35×), element-wise ~2.5× slower, axis-0 sum 15× slower (cache-unfriendly direction, no vectorised per-axis kernel yet). New smoke test `tests/061-bench-runner-smoke.phpt` invokes the runner via `proc_open` and asserts exit 0 + one JSON record per scenario — catches "runner is broken" without locking flaky timing numbers. Story 13 is now fully shipped (Phases A + B + C); story file moved to `done/`. Version bumped to **0.0.13**. **Out of scope, deliberately:** external publication (Story 14), CI integration (shared runners are too noisy), comparison against other PHP numeric libraries.
 - **2026-05-01 — `18-bool-and-comparisons` (Story 17)** added the `bool` dtype, six static comparison methods, and `NDArray::where`. **Decisions 32–35** locked. (1) `bool` is a 1-byte canonical-0/1 dtype with lenient reads and write-canonicalisation — bool ⊕ bool arithmetic falls through to the slow path and behaves as logical OR/AND/XOR (matches NumPy). The promotion table widened to 5×5; `bool` sits at the bottom (`bool ⊕ X = X`). (2) Six comparison ops (`eq`, `ne`, `lt`, `le`, `gt`, `ge`) as `public static` methods returning bool NDArrays of the broadcast shape. NaN policy corrected from the story's literal wording to IEEE 754 / NumPy: `eq`/`lt`/`le`/`gt`/`ge` return false on NaN, **`ne` returns true on NaN**. (3) `NDArray::where(cond, x, y)` — cond must be bool (else `\DTypeException`); output dtype is the promotion of `x` and `y` (cond's dtype is irrelevant); broadcasts across all three operands using the existing 4-operand nditer (`NUMPHP_ITER_MAX_OPERANDS = 4` already accommodated). 4 new phpt tests (064–067) cover dtype plumbing × factories × fromArray/toArray × save/load × promotion × every comparison op × broadcasting × NaN policy × where with all-array / scalar-mixed / 3-way-broadcast / cond-not-bool / shape-mismatch × bool through every existing reduction × bool through transpose/reshape/concatenate. The sprint-16 element-wise fast path required one extra predicate (`out_dt != NUMPHP_BOOL`) so bool arithmetic always takes the slow path where write-canonicalisation lives. Build clean at `-Wall -Wextra`; 67/67 + 1 skipped. Docs: `docs/api/ndarray.md` (Comparisons + Where sections), `docs/concepts/dtypes.md` (5×5 promotion table + bool reductions row + decisions 32/34 cross-references), `docs/concepts/nan-policy.md` (Comparisons under NaN section), `docs/cheatsheet-numpy.md` (Comparisons & where rows). Version bumped to **0.0.18**. **Out of scope, deliberately:** boolean indexing (depends on this sprint, follow-up), `any`/`all` reductions (small follow-up), bitwise ops on bool, comparison-operator overloading (decision 35).
 - **2026-05-01 — `17-cumsum-cumprod` (Story 18)** added `cumsum` / `cumprod` (and `nancumsum` / `nancumprod`) as instance methods on `NDArray`. Single new kernel `numphp_cumulative` in `ops.c` patterned on `numphp_reduce`; `do_cumulative_method` in `ndarray.c` patterned on `do_reduce_method`. `?int $axis = null` flattens (1-D output of length `size()`); integer axis cumulates along that axis preserving input shape; negative axis allowed; out-of-range throws `\ShapeException`. Output dtype: int → `int64`, f32 → `f32`, f64 → `f64`. NaN propagates by default; `nancumsum` / `nancumprod` skip NaN by treating it as the additive (0) / multiplicative (1) identity (all-NaN slice → all 0 / all 1, no exception, symmetric with how `nansum` already behaves). Integer dtypes alias the plain forms in the nan-variants since they cannot hold NaN. **Decision 31** locks the deliberate divergence from NumPy: `cumprod` on int promotes to `int64` (NumPy preserves input dtype) — same silent-overflow concern that drove decision 9 for `sum`, magnified for products which grow faster. 2 new phpt tests (062-cumulative, 063-cumulative-nan) cover all four numeric dtypes × axis=null/integer/negative × NaN propagation × all-NaN slice × 3-D strided walk × dtype-promotion table × empty input. Build clean at `-Wall -Wextra`; 63/63 + 1 skipped. Docs: `docs/api/ndarray.md` (cumulative-reductions section + nan-variants subsection), `docs/concepts/dtypes.md` (reductions table + footnote), `docs/cheatsheet-numpy.md` (5 new rows including the `cumprod` divergence flag). Version bumped to **0.0.17**. **Out of scope, deliberately:** multi-axis cumulation (NumPy doesn't either), Kahan/Neumaier compensated summation (default paths everywhere in NumPHP use simple fold; revisit on accuracy bug), in-place variants (consistent with the broader "no in-place ops yet" stance), `bool` input handling (deferred to Story 17 in a follow-up sprint).
+- **2026-05-03 — clean-rule-no-recursive-rm (small fix)** Replaced phpize's recursive `find . -name '*.so' | xargs rm -f` (and friends for `.lo`, `.o`, `.dep`, `.la`, `.a`, `.libs/`) with explicit path-scoped rules. New `Makefile.frag` at project root contains the override; new `PHP_ADD_MAKEFILE_FRAGMENT` call in `config.m4` hooks it. Survives `phpize --clean`. **Why:** the upstream recursive rules silently delete any matching file under the project tree — surfaced when a sprint cleanup cycle wiped numpy's compiled `.so` files inside `bench/.venv/`. Recursive rm in a build tool is a foot-gun; structural fix is to stop using it. **Make warns** "overriding recipe for target 'clean'" — expected and intended; it's the override doing its job. Version bumped to **0.0.22**. 67/67 phpt + 1 FFI skip pass; full clean/rebuild cycle verified end-to-end with the bench round-trip.
+- **2026-05-03 — `19b-fix-do-operation-leak` (Story 19, interstitial fix)** closed the compound-assign refcount leak ASan flagged in 19b. Investigation pinned the discriminator: PHP's `ZEND_ASSIGN_OP` opcode dispatches as `add_function(var_ptr, var_ptr, value)` (`Zend/zend_execute.c:1652`), making `result == op1` a pointer-exact signal — the heuristics our four prior fix attempts used (`Z_TYPE_P(result) == IS_OBJECT`) were wrong because PHP reuses VM tmp slots without clearing type-info. Fix lifted verbatim from `ext/gmp/gmp.c:480` (`gmp_do_operation`): if `result == op1`, snapshot op1 to a local, redirect op1 to the snapshot, run the inner kernel, dtor the snapshot on success. 6-line outer wrapper around `numphp_do_operation`; existing `do_binary_op_core` inner kernel untouched. New `lsan.supp` at repo root suppresses three categories of PHP-internal startup leaks (`zend_startup_module_ex`, `_dl_init`, `getaddrinfo` — each annotated with rationale; rejects any numphp_* suppression). CI `sanitizers` job + `scripts/sanitize.sh` flipped `detect_leaks=0` → `detect_leaks=1` with `LSAN_OPTIONS=suppressions=lsan.supp`. Decision 37 amended (leak detection now ON; deferred-fix paragraph dropped). Open-item entry retired. 67/67 phpt + 1 FFI skip pass under both regular AND sanitizer-with-leaks-on builds. Version bumped to **0.0.21**.
+- **2026-05-03 — `19b-asan-ubsan` (Story 19, Phase B)** wired ASan + UBSan into CI. New `sanitizers` CI job runs the phpt suite under `-fsanitize=address,undefined -fno-omit-frame-pointer -O1 -g` with gcc (clang dropped — no advantage at our scale, saves an apt install step). `LD_PRELOAD` for libasan + libubsan ensures ASan loads before libc malloc (extension is `dlopen`'d into PHP after startup). `USE_ZEND_ALLOC=0` makes PHP's pool allocator transparent to ASan. **One real bug surfaced** by the sanitizer run: `numphp_zval_wrap_ndarray` leaks the prior `$c` object on `$c += $b` compound assignment — PHP passes `result == op1` to `do_operation`, so `object_init_ex(result, ...)` overwrites without releasing. Initial fix attempt regressed 9 tests with a segfault; per cap-iteration rule the bug is deferred (open item recorded; fix is to dtor only in `do_binary_op_core` rather than in the shared wrap function). **`detect_leaks=0`** while the bug is open: PHP-engine startup leaks (`getaddrinfo`, `dlopen` `_init`, module table) plus our one extension leak make LSan unusable; ASan and UBSan still catch overflows, UAF, signed overflow, alignment, shifts. Local convenience scripts: `scripts/sanitize.sh` (mirrors CI) and `scripts/memcheck.sh` (valgrind via `run-tests.php -m`; fails fast with apt-install hint if valgrind isn't installed — we don't auto-install per user policy). **Decision 37** locked. 67/67 phpt + 1 FFI skip pass under sanitizers; baseline build also still green at the 19a flag set. Version bumped to **0.0.20**. **Out of scope, deliberately:** debug-PHP / `ZEND_RC_DEBUG` (sprint 19c); fixing the `do_operation` leak (follow-up sprint, requires a careful refcount audit); skipping the deliberate use-after-free CI-sanity-check branch (the working sanitizer build verified end-to-end via the real do_operation finding — that IS the sanity check, just unintentional).
+- **2026-05-03 — `19a-compiler-flag-hardening` (Story 19, Phase A)** tightened the static check surface. New canonical CFLAGS: `-Wall -Wextra -Werror -Wshadow -Wstrict-prototypes -Wmissing-prototypes`. Decision 36 locked. Two categories of fix needed: (1) one pre-existing `-Wunused-parameter` hit on `BufferView::__construct` (the only no-args method that didn't call `ZEND_PARSE_PARAMETERS_NONE();` — fixed by adding it, matching the pattern of every other no-args method in the codebase); (2) 87 `-Wmissing-prototypes` warnings on Zend-macro-generated symbols (`zim_NDArray_*`, `zim_Linalg_*`, `zim_BufferView_*` from `PHP_METHOD`; `zm_startup_numphp` / `zm_info_numphp` / `get_module` from `PHP_MINIT_FUNCTION` / `PHP_MINFO_FUNCTION` / `ZEND_GET_MODULE`). Fixed by file-scope `#pragma GCC diagnostic ignored "-Wmissing-prototypes"` push/pop blocks in the four source files containing macro-generated functions (`numphp.c`, `ndarray.c`, `linalg.c`, `bufferview.c`); rationale is that these functions are referenced only via `zend_function_entry` tables by function pointer — they can't be `static` (table takes their address) and don't belong in a header (TU-internal). All 5 CFLAGS sites in `.github/workflows/ci.yml` updated (build-test, examples, valgrind, coverage, macos); coverage job exempted from `-Werror` because `--coverage` instrumentation can introduce diagnostics that don't reflect source defects (job stays `continue-on-error: true` regardless). Local sanity check: deliberately shadowed an `int ndim_out` in `src/ops.c:443`, confirmed `-Werror=shadow` failed the build, reverted; same shape will fail the CI build-test job once pushed. Build clean at the new flag set; 67/67 phpt + 1 FFI skip pass; doc-snippet harness green. Version bumped to **0.0.19**. **Deferred to a follow-up sprint:** `-Wcast-align`, `-Wnull-dereference`, `-Wdouble-promotion` — each likely needs a project-wide source-pattern decision (alignment policy / null-check policy / f32 literal suffix policy).
 - **2026-05-01 — `16-fastpath-optimizations` (Story 16)** closed the two clear-cause weak spots from the 0.0.13 benchmark. Two kernel additions, no API change, no SIMD intrinsics. (1) Element-wise contiguous fast path in `do_binary_op_core`: when both inputs and output are C-contiguous, same dtype, identical shape (no broadcasting), skip the iterator + per-element function-call dispatch and emit a flat typed-pointer loop that the compiler auto-vectorises at `-O2`. Mixed-dtype, broadcasting, and non-contig sources still take the original slow path. (2) Axis-0 sum tiled kernel in `numphp_reduce`: 2-D C-contiguous f32/f64 sources, axis=0, no NaN-skip dispatch to a column-strip kernel that processes 32 columns in lockstep with pairwise recursion preserved per column, so the leaf reads contiguous cache lines instead of one cache miss per row. Output is bit-identical to the slow path because each column's recursion structure is unchanged. Numbers (vs NumPy): elementwise add 2.64× → **1.01×**, mul 2.51× → **1.05×**, sum axis=0 15.48× → **4.40×**. All other scenarios stable within noise (matmul 0.96×, linalg parity, interop ~0.35× — *faster* than NumPy still). All 61 phpt tests still pass with bit-identical output verified by `032-`, `038-`, `058-`. `docs/benchmarks.md` refreshed; `bench/run.sh` reproduces. Version bumped to **0.0.14**. **Out of scope, deliberately:** SIMD intrinsics, axis-1 fast path, fast paths for other reductions, new dtypes, new functions. The remaining ~4× gap on axis reductions is no longer cache-bound — closing it would require intrinsics, deferred.

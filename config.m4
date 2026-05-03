@@ -35,4 +35,10 @@ if test "$PHP_NUMPHP" != "no"; then
 
   dnl Make headers in src/ visible so cross-file `#include "numphp.h"` resolves.
   PHP_ADD_INCLUDE([$ext_srcdir/src])
+
+  dnl Override phpize's clean / distclean rules with scoped versions
+  dnl (see Makefile.frag). Upstream uses recursive `find . | xargs rm -f`
+  dnl which silently deletes any matching file under the tree — including
+  dnl bench/.venv/.../*.so. Explicit paths only, no recursive find.
+  PHP_ADD_MAKEFILE_FRAGMENT
 fi

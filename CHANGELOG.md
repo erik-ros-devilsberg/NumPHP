@@ -7,6 +7,72 @@ and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.
 
 ## [Unreleased]
 
+## [0.0.22] — 2026-05-03
+
+### Fixed — recursive rm in phpize's clean target
+Override phpize's auto-generated `clean` and `distclean` rules so they no longer use recursive `find . | xargs rm -f`.
+
+- **New `Makefile.frag`** at the project root with scoped clean/distclean rules. Lists every build artefact path explicitly. No `find`. Hooked into the generated `Makefile` via a new `PHP_ADD_MAKEFILE_FRAGMENT` call in `config.m4`. Survives `phpize --clean`.
+- **Why:** phpize's upstream `Makefile.global` emits `find . -name '*.so' | xargs rm -f` (and the same for `.lo`, `.o`, `.dep`, `.la`, `.a`, and `.libs/` dirs) recursively from project root. That deletes any matching file in the tree — for example numpy's compiled C extensions inside `bench/.venv/`. Recursive rm in a build tool is a foot-gun; the structural fix is to stop using it, not to relocate the things it might hit.
+- `make clean` now warns "overriding recipe for target 'clean'" — that warning is **expected and intended**; it's make confirming the override won. Makefile.frag has a comment explaining this.
+
+### Tests + build
+- 67/67 phpt + 1 FFI skip pass; doc-snippet harness green.
+- Full `make clean && make` cycle leaves `bench/.venv/` (and any other foreign content under the tree) untouched. Verified end-to-end with the bench round-trip.
+
+## [0.0.21] — 2026-05-03
+
+### Fixed — Story 19, interstitial: do_operation compound-assign refcount leak
+The 48-byte refcount leak ASan flagged in 0.0.20 is fixed. LeakSanitizer is now ON in CI.
+
+- **`numphp_do_operation` now uses the GMP idiom** (`ext/gmp/gmp.c:480`): if `result == op1` (pointer-equal — PHP's `ZEND_ASSIGN_OP` opcode dispatches `$c += $b` as `add_function(&$c, &$c, &$b)`), snapshot op1 to a local, redirect op1 to the snapshot, run the inner kernel, then `zval_ptr_dtor` the snapshot on success. 6-line outer wrapper; the existing `do_binary_op_core` kernel is unchanged. Four prior fix attempts in 0.0.20's sprint failed because they used `IS_OBJECT(result)` as the discriminator — wrong signal (PHP reuses VM tmp slots without clearing type-info, so `IS_OBJECT` fires on stale-pointer slots → UAF on dtor).
+- **`lsan.supp`** committed at repo root. Suppresses three categories of PHP-internal startup leaks (`zend_startup_module_ex`, `_dl_init`, `getaddrinfo`). Each entry has a `#` comment explaining the rationale. Any leak originating in a `numphp_*` / `zim_NDArray_*` / `zim_Linalg_*` / `zim_BufferView_*` frame fails the sanitizer job — those are real bugs.
+- **CI `sanitizers` job + `scripts/sanitize.sh`** flipped `detect_leaks=0` → `detect_leaks=1` with `LSAN_OPTIONS=suppressions=lsan.supp`.
+
+### Decisions amended
+- **Decision 37** — leak detection paragraph rewritten: LSan is on; PHP-internal leaks suppressed via `lsan.supp`; numphp-symbol suppressions rejected.
+
+### Tests + build
+- 67/67 phpt + 1 FFI skip pass under both regular AND sanitizer-with-leaks-on builds.
+- Build clean at the 19a flag set + sanitizer flags.
+
+## [0.0.20] — 2026-05-03
+
+### Added — Story 19, Phase B: runtime sanitizers
+ASan + UBSan now run on every CI build. No source behaviour changes shipped (one real bug surfaced — see Known issues).
+
+- **New CI job `sanitizers`** runs the phpt suite under `-fsanitize=address,undefined -fno-omit-frame-pointer -O1 -g` with gcc. `LD_PRELOAD` ensures the sanitizer runtimes load before libc malloc (the extension is `dlopen`'d into PHP after startup). `USE_ZEND_ALLOC=0` so ASan can see every allocation.
+- **Local scripts** — `scripts/sanitize.sh` mirrors the CI job (full sanitizer build + phpt run); `scripts/memcheck.sh` runs the suite under valgrind via `run-tests.php -m` (fails fast with an apt install hint if valgrind isn't on `$PATH`).
+- **`detect_leaks=0`** for now — see Known issues.
+
+### Decisions locked
+- **Decision 37** — sanitizer policy: ASan+UBSan in CI on every build (gcc; clang dropped); `LD_PRELOAD` for libasan+libubsan; `USE_ZEND_ALLOC=0`; valgrind CI job (existing) plus `scripts/memcheck.sh` for opt-in local. Local dev does not mandate any sanitizer toolchain. Leak detection currently disabled — see below.
+
+### Known issues
+- **Compound-assign refcount leak** in `numphp_zval_wrap_ndarray`: `$c += $b` leaks 48 bytes (the prior `$c` object's zend_object header). PHP's compound-assign opcode passes `result == op1` to the `do_operation` handler; `object_init_ex(result, ...)` overwrites without releasing the prior content. Initial fix (defensive `zval_ptr_dtor`) regressed 9 tests including a segfault — too aggressive for non-compound-assign callers. Correct fix is to dtor only in the `do_binary_op_core` path. Deferred to a follow-up sprint. While open, ASan runs with `detect_leaks=0`.
+
+### Tests + build
+- 67/67 phpt + 1 FFI skip; doc-snippet harness green at the regular build AND under sanitizers.
+- Build clean at the 19a flag set + sanitizer flags.
+
+## [0.0.19] — 2026-05-03
+
+### Changed — Story 19, Phase A: compiler flag hardening
+Static check surface tightened. No source behaviour changes.
+
+- **Canonical CFLAGS** are now `-Wall -Wextra -Werror -Wshadow -Wstrict-prototypes -Wmissing-prototypes` (plus `-O2 -g` for release builds, `-O0 -g` for valgrind / coverage). All five CI jobs (`build-test`, `examples`, `valgrind`, `coverage`, `macos`) updated. Coverage job exempted from `-Werror` because `--coverage` instrumentation can introduce diagnostics that don't reflect source defects.
+- **Two pre-existing issues fixed**:
+  - `BufferView::__construct` was the only no-args method that didn't call `ZEND_PARSE_PARAMETERS_NONE();`, leaving `execute_data` unused. Added the call to match every other no-args method.
+  - 87 `-Wmissing-prototypes` warnings on Zend-macro-generated function symbols (`zim_NDArray_*`, `zim_Linalg_*`, `zim_BufferView_*` from `PHP_METHOD`; `zm_startup_numphp` / `zm_info_numphp` / `get_module` from module-entry macros). Fixed via file-scope `#pragma GCC diagnostic ignored "-Wmissing-prototypes"` push/pop blocks in the four containing source files. These functions can't be `static` (the `zend_function_entry` table takes their address) and don't belong in a header (TU-internal).
+- **Local sanity check**: deliberately shadowed `int ndim_out` in `src/ops.c`, confirmed `-Werror=shadow` failed the build, reverted.
+
+### Decisions locked
+- **Decision 36** — canonical compiler warning flag set; `-Wpedantic` and `-Wconversion` deliberately excluded; `-Wcast-align`, `-Wnull-dereference`, `-Wdouble-promotion` deferred to a follow-up sprint.
+
+### Tests + build
+- 67/67 phpt + 1 FFI skip; doc-snippet harness green.
+- Build clean at the new flag set.
+
 ## [0.0.18] — 2026-05-01
 
 ### Added — Story 17: bool dtype, comparisons, and where

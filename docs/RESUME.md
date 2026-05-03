@@ -1,13 +1,14 @@
-# Resume Notes — 2026-05-01 (after sprint 18)
+# Resume Notes — 2026-05-03 (after sprint 19b-fix + clean-rule fix)
 
 ## Where we are
 
-**Version 0.0.18.** Pre-release, iterative. Building toward 0.1.0.
+**Version 0.0.22.** Pre-release, iterative. Building toward 0.1.0.
 
-**17 sprints shipped.** Build green at `-Wall -Wextra`; 67/67 phpt + 1
-FFI skip + doc-snippet harness running ~75+ fenced ```php blocks.
-Last two sprints added cumulative reductions (sprint 17) and the
-`bool` dtype + comparisons + `where` (sprint 18).
+**20 sprints + 1 fix shipped.** Build green at
+`-Wall -Wextra -Werror -Wshadow -Wstrict-prototypes -Wmissing-prototypes`
+(sprint 19a); ASan + UBSan + LSan run on every CI build with
+`detect_leaks=1` (sprint 19b + 19b-fix); 67/67 phpt + 1 FFI skip
++ doc-snippet harness running ~75+ fenced ```php blocks.
 
 | # | Sprint | Stories | Version |
 |---|--------|---------|---------|
@@ -17,11 +18,83 @@ Last two sprints added cumulative reductions (sprint 17) and the
 | 16 | (skipped — version numbering rule changed mid-flight) | — | — |
 | 17 | 17-cumsum-cumprod (Story 18) | 18 | 0.0.17 |
 | 18 | 18-bool-and-comparisons (Story 17) | 17 | 0.0.18 |
+| 19 | 19a-compiler-flag-hardening (Story 19, Phase A) | 19a | 0.0.19 |
+| 20 | 19b-asan-ubsan (Story 19, Phase B) | 19b | 0.0.20 |
+| 21 | 19b-fix-do-operation-leak | — | 0.0.21 |
+| —  | clean-rule-no-recursive-rm | — | 0.0.22 |
 
 **Backlog:** Story 11 Phase C (Arrow IPC) post-1.0, Story 12 (PECL
-packaging — parked), Story 14 (community + outreach).
+packaging — parked), Story 14 (community + outreach), Story 19
+Phase C (debug PHP + `ZEND_RC_DEBUG`).
 
-## What just landed (sprint 18)
+## What just landed (sprint 19b-fix)
+
+Closed the do_operation compound-assign leak. LSan flipped on in
+CI.
+
+- **GMP idiom** (`ext/gmp/gmp.c:480`) lifted into `numphp_do_operation`:
+  if `result == op1` (pointer-equal — confirmed via reading
+  `Zend/zend_execute.c:1652` for `ZEND_ASSIGN_OP`), snapshot op1
+  to a local, redirect, run the inner kernel, dtor the snapshot
+  on success. 6-line outer wrapper; existing `do_binary_op_core`
+  unchanged. Four prior fix attempts had used `IS_OBJECT(result)`
+  as the discriminator and all failed — wrong signal because PHP
+  reuses VM tmp slots without clearing type-info, so dtor'ing
+  triggers UAF on stale-pointer slots.
+- **`lsan.supp`** at repo root. Three suppression entries
+  (`zend_startup_module_ex`, `_dl_init`, `getaddrinfo`) cover
+  the PHP-internal startup leaks. Comments document each one;
+  numphp_* symbols are rejected.
+- **CI `sanitizers` job** + **`scripts/sanitize.sh`** flipped
+  `detect_leaks=0` → `detect_leaks=1` with
+  `LSAN_OPTIONS=suppressions=lsan.supp`. Any new leak in numphp
+  code now fails the build.
+
+## What landed in sprint 19b
+
+ASan + UBSan in CI. New `sanitizers` CI job runs the phpt suite
+under `-fsanitize=address,undefined -fno-omit-frame-pointer -O1 -g`
+with gcc. Decision 37 locked.
+
+- **CI plumbing:** `LD_PRELOAD` for libasan + libubsan (extension
+  is `dlopen`'d after PHP startup, so without preload ASan
+  complains "runtime does not come first"). `USE_ZEND_ALLOC=0`
+  so ASan sees every malloc. Compiler is gcc — clang dropped
+  (no advantage at our scale, saves an apt install).
+- **Real bug surfaced:** `numphp_zval_wrap_ndarray` leaks 48
+  bytes on `$c += $b` — fixed in sprint 19b-fix above.
+- **Local convenience:** `scripts/sanitize.sh` mirrors CI exactly;
+  `scripts/memcheck.sh` runs the suite under valgrind (fails
+  fast with apt install hint if valgrind isn't on `$PATH`).
+  Recommended cadence — `sanitize.sh` during active work on
+  refcounts/buffer arithmetic/error paths; `memcheck.sh` at
+  sprint boundaries.
+
+## What landed in sprint 19a
+
+Compiler flag tightening. New canonical CFLAGS:
+`-Wall -Wextra -Werror -Wshadow -Wstrict-prototypes -Wmissing-prototypes`.
+Decision 36 locked.
+
+- Two pre-existing issues fixed: `BufferView::__construct` was
+  silently triggering `-Wunused-parameter` (fixed by adding
+  `ZEND_PARSE_PARAMETERS_NONE();` to match every other no-args
+  method); 87 `-Wmissing-prototypes` warnings on Zend-macro-
+  generated function symbols suppressed via file-scope
+  `#pragma GCC diagnostic` blocks in `numphp.c`, `ndarray.c`,
+  `linalg.c`, `bufferview.c`.
+- All 5 CFLAGS sites in `.github/workflows/ci.yml` updated.
+  `coverage` job exempted from `-Werror` (instrumentation can
+  introduce diagnostics that don't reflect source defects;
+  job is informational).
+- Local sanity check: deliberate shadow in `src/ops.c`
+  failed the build at `-Werror=shadow`; reverted.
+
+**Deferred to a future sprint:** `-Wcast-align`,
+`-Wnull-dereference`, `-Wdouble-promotion` — each likely needs
+a project-wide source-pattern decision before adoption.
+
+## What landed in sprint 18
 
 Bool dtype + six comparison ops + `where`. Three things, one sprint,
 each strictly depending on the prior. Decisions 32–35 locked.
@@ -104,18 +177,15 @@ plan in the main thread (no subagent).
 
 ## Working state of the build
 
-- Source files changed in sprint 18: `src/ndarray.h` (enum +
-  NUMPHP_BOOL), `src/ndarray.c` (dtype helpers, read/write,
-  fromArray/toArray, eye/arange, fast-path predicate excludes
-  bool, slow-path NUMPHP_BOOL case in arithmetic, comparison +
-  where PHP_METHOD wrappers, arginfo, method table), `src/nditer.h`
-  (typed bool reads), `src/nditer.c` (5×5 promotion table),
-  `src/io.c` (dtype byte check widened, format_cell bool case),
-  `src/ops.h` (compare op enum, numphp_compare/where prototypes),
-  `src/ops.c` (numphp_compare + numphp_where + bool entries in
-  reduce_out_dtype/cumulative_out_dtype), `src/numphp.h` (version).
-- 35 architectural decisions in `docs/system.md` (32–35 added
-  this sprint).
+- Source files changed in sprint 19b-fix: `src/ndarray.c`
+  (GMP-idiom outer wrapper around `numphp_do_operation`),
+  `lsan.supp` (new), `.github/workflows/ci.yml` (sanitizers
+  job env vars flipped to `detect_leaks=1` +
+  `LSAN_OPTIONS=suppressions=lsan.supp`), `scripts/sanitize.sh`
+  (same flip), `src/numphp.h` (version).
+- 37 architectural decisions in `docs/system.md` (decision 37
+  amended this sprint — paragraph rewritten, no new decision
+  number).
 - `bench/.venv/` contains numpy 2.4.4. Already gitignored.
 
 ## Known minor follow-ups (not blocking)
@@ -155,14 +225,16 @@ plan in the main thread (no subagent).
 
 ```bash
 cd /home/arciitek/git/numphp
-phpize && ./configure && make CFLAGS="-Wall -Wextra -O2 -g"
+phpize && ./configure && make CFLAGS="-Wall -Wextra -Werror -Wshadow -Wstrict-prototypes -Wmissing-prototypes -O2 -g"
 NO_INTERACTION=true make test                       # 67/67 + 1 skipped
 bash bench/run.sh                                   # numphp vs NumPy
+bash scripts/sanitize.sh                            # ASan + UBSan; on-demand
+bash scripts/memcheck.sh                            # valgrind; sprint boundaries
 ```
 
 ## Outstanding ops
 
-- No remote configured. Local commits only.
+- Remote: `git@github.com:erik-ros-devilsberg/NumPHP.git` (origin).
 
 ## Known dev-env caveats
 

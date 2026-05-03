@@ -13,6 +13,12 @@ zend_class_entry *numphp_shape_exception_ce;
 zend_class_entry *numphp_dtype_exception_ce;
 zend_class_entry *numphp_index_exception_ce;
 
+/* Zend module-entry macros (PHP_MINIT_FUNCTION, PHP_MINFO_FUNCTION,
+ * ZEND_GET_MODULE) generate non-static functions without prototypes. Same
+ * justification as the PHP_METHOD pragma — see decision 36. */
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wmissing-prototypes"
+
 PHP_MINIT_FUNCTION(numphp)
 {
     (void)type;
@@ -70,3 +76,5 @@ zend_module_entry numphp_module_entry = {
 #ifdef COMPILE_DL_NUMPHP
 ZEND_GET_MODULE(numphp)
 #endif
+
+#pragma GCC diagnostic pop

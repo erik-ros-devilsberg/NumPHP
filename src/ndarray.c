@@ -13,6 +13,15 @@
 #include <stdint.h>
 #include <limits.h>
 
+/* PHP_METHOD()-generated functions (zim_NDArray_*) are referenced only via the
+ * zend_function_entry table by function pointer. The Zend macro picks the symbol
+ * name and emits a non-static definition without a prior prototype, so
+ * -Wmissing-prototypes fires on every method. We can't make them static (the
+ * function table takes their address) and we don't write headers for them
+ * (each is internal to this TU). See decision 36. */
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wmissing-prototypes"
+
 zend_class_entry *numphp_ndarray_ce;
 static zend_object_handlers numphp_ndarray_handlers;
 
@@ -1278,7 +1287,28 @@ static zend_result numphp_do_operation(zend_uchar opcode, zval *result, zval *op
      && opcode != ZEND_MUL && opcode != ZEND_DIV) {
         return FAILURE;
     }
-    return (zend_result)do_binary_op_core(opcode, result, op1, op2);
+
+    /* GMP idiom (ext/gmp/gmp.c:480) for safe in-place compound assignment.
+     * For `$c += $b`, PHP's ZEND_ASSIGN_OP opcode dispatches as
+     * `add_function(&$c, &$c, &$b)` so result == op1 (both are var_ptr to $c).
+     * Without this snapshot, the inner kernel's write to result would orphan
+     * the prior content of op1 (same memory) — that was the 48-byte refcount
+     * leak ASan flagged in sprint 19b. The snapshot decouples op1 from result
+     * so the kernel reads from a borrowed copy and writes to result freely;
+     * after success we dtor the snapshot to release the prior content.
+     * Non-aliased calls (regular $a + $b) skip this whole block. */
+    zval op1_copy;
+    if (result == op1) {
+        ZVAL_COPY_VALUE(&op1_copy, op1);
+        op1 = &op1_copy;
+    }
+
+    zend_result retval = (zend_result)do_binary_op_core(opcode, result, op1, op2);
+
+    if (retval == SUCCESS && op1 == &op1_copy) {
+        zval_ptr_dtor(op1);
+    }
+    return retval;
 }
 
 PHP_METHOD(NDArray, add)
@@ -2810,3 +2840,5 @@ void numphp_register_ndarray_class(void)
     numphp_ndarray_handlers.count_elements  = numphp_count_elements;
     numphp_ndarray_handlers.do_operation    = numphp_do_operation;
 }
+
+#pragma GCC diagnostic pop

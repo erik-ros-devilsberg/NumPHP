@@ -21,6 +21,11 @@
 #include <stdint.h>
 #include <string.h>
 
+/* PHP_METHOD()-generated functions (zim_BufferView_*) are referenced only via
+ * the zend_function_entry table by function pointer. See decision 36. */
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wmissing-prototypes"
+
 zend_class_entry *numphp_bufferview_ce;
 static zend_object_handlers numphp_bufferview_handlers;
 
@@ -123,6 +128,7 @@ int numphp_bufferview_create(zval *out, numphp_ndarray *a, int writeable)
 /* No public constructor — bufferView() is the only way to obtain an instance. */
 PHP_METHOD(BufferView, __construct)
 {
+    ZEND_PARSE_PARAMETERS_NONE();
     zend_throw_exception(numphp_ndarray_exception_ce,
         "BufferView cannot be constructed directly; use NDArray::bufferView()", 0);
     RETURN_THROWS();
@@ -166,3 +172,5 @@ void numphp_register_bufferview_class(void)
     numphp_bufferview_handlers.free_obj  = numphp_bufferview_free_object;
     numphp_bufferview_handlers.clone_obj = numphp_bufferview_clone_object;
 }
+
+#pragma GCC diagnostic pop

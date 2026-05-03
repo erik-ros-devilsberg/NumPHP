@@ -34,7 +34,7 @@ jobs:
 
       - run: phpize
       - run: ./configure --enable-numphp
-      - run: make CFLAGS="-Wall -Wextra -O2 -g"
+      - run: make CFLAGS="-Wall -Wextra -Werror -Wshadow -Wstrict-prototypes -Wmissing-prototypes -O2 -g"
       - run: make test TESTS="--show-diff"
 
   examples:
@@ -54,7 +54,7 @@ jobs:
 
       - run: phpize
       - run: ./configure --enable-numphp
-      - run: make CFLAGS="-Wall -Wextra -O2 -g"
+      - run: make CFLAGS="-Wall -Wextra -Werror -Wshadow -Wstrict-prototypes -Wmissing-prototypes -O2 -g"
 
       - name: Run examples and diff against .expected
         run: |
@@ -81,12 +81,45 @@ jobs:
 
       - run: phpize
       - run: ./configure --enable-numphp
-      - run: make CFLAGS="-Wall -Wextra -O0 -g"
+      - run: make CFLAGS="-Wall -Wextra -Werror -Wshadow -Wstrict-prototypes -Wmissing-prototypes -O0 -g"
       - name: Run phpt under valgrind
         env:
           USE_ZEND_ALLOC: '0'
           TEST_PHP_ARGS: '-m'
         run: make test
+
+  sanitizers:
+    name: ASan + UBSan (gcc / PHP 8.3)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: shivammathur/setup-php@v2
+        with:
+          php-version: '8.3'
+          tools: phpize
+
+      - name: Install BLAS / LAPACK
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libopenblas-dev liblapack-dev
+
+      - run: phpize
+      - run: ./configure --enable-numphp
+      - run: make CFLAGS="-fsanitize=address,undefined -fno-omit-frame-pointer -O1 -g -Wall -Wextra -Werror -Wshadow -Wstrict-prototypes -Wmissing-prototypes" LDFLAGS="-fsanitize=address,undefined"
+
+      - name: Run phpt under ASan + UBSan
+        # PHP-internal startup leaks (getaddrinfo, dlopen _init, module
+        # table) are suppressed via lsan.supp. Any leak originating in a
+        # numphp_*/zim_NDArray_*/zim_Linalg_*/zim_BufferView_* frame fails
+        # the job — those are real bugs, not noise.
+        env:
+          USE_ZEND_ALLOC: '0'
+          ASAN_OPTIONS: 'detect_leaks=1:abort_on_error=1:halt_on_error=1'
+          LSAN_OPTIONS: 'suppressions=lsan.supp'
+          UBSAN_OPTIONS: 'print_stacktrace=1:halt_on_error=1'
+        run: |
+          export LD_PRELOAD="$(gcc -print-file-name=libasan.so):$(gcc -print-file-name=libubsan.so)"
+          make test
 
   coverage:
     name: gcov (non-blocking — informational)
@@ -105,7 +138,11 @@ jobs:
           sudo apt-get install -y libopenblas-dev liblapack-dev gcovr
 
       - run: phpize
-      - run: ./configure --enable-numphp CFLAGS="--coverage -O0 -g" LDFLAGS="--coverage"
+      # Coverage build: warning flags applied for parity, but -Werror is
+      # omitted because --coverage instrumentation can introduce diagnostics
+      # that don't reflect source defects. Job is informational anyway. See
+      # decision 36.
+      - run: ./configure --enable-numphp CFLAGS="--coverage -Wall -Wextra -Wshadow -Wstrict-prototypes -Wmissing-prototypes -O0 -g" LDFLAGS="--coverage"
       - run: make
       - run: make test
       - run: |
@@ -134,5 +171,5 @@ jobs:
         run: brew install openblas lapack
       - run: phpize
       - run: ./configure --enable-numphp
-      - run: make
+      - run: make CFLAGS="-Wall -Wextra -Werror -Wshadow -Wstrict-prototypes -Wmissing-prototypes -O2 -g"
       - run: make test
