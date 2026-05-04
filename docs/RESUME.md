@@ -1,16 +1,17 @@
-# Resume Notes — 2026-05-04 (after sprint 20a)
+# Resume Notes — 2026-05-04 (after sprint 20b — Story 20 closed)
 
 ## Where we are
 
-**Version 0.0.24.** Pre-release, iterative. Building toward 0.1.0.
+**Version 0.0.25.** Pre-release, iterative. Building toward 0.1.0.
 
-**22 sprints + 1 fix shipped.** Build green at
+**23 sprints + 1 fix shipped.** Build green at
 `-Wall -Wextra -Werror -Wshadow -Wstrict-prototypes -Wmissing-prototypes`
 (sprint 19a); ASan + UBSan + LSan run on every CI build with
 `detect_leaks=1` (sprint 19b + 19b-fix); debug-PHP CI lane runs
 phpt + examples with `ZEND_RC_DEBUG=1` + `ZEND_ALLOC_DEBUG=1` +
-`USE_ZEND_ALLOC=0` (sprint 19c); 69/69 phpt + 1 FFI skip + doc
-snippet harness running ~85+ fenced ```php blocks.
+`USE_ZEND_ALLOC=0` (sprint 19c); 71/71 phpt + 1 FFI skip + doc
+snippet harness running ~95+ fenced ```php blocks. **Story 20
+(bool surface follow-up) closed.**
 
 | # | Sprint | Stories | Version |
 |---|--------|---------|---------|
@@ -26,16 +27,47 @@ snippet harness running ~85+ fenced ```php blocks.
 | —  | clean-rule-no-recursive-rm | — | 0.0.22 |
 | 22 | 19c-debug-php (Story 19, Phase C) | 19c | 0.0.23 |
 | 23 | 20a-bool-reductions (Story 20, 1 of 2) | 20a | 0.0.24 |
+| 24 | 20b-bool-bitwise-logical (Story 20, 2 of 2) | 20b | 0.0.25 |
 
 **Backlog:** Story 11 Phase C (Arrow IPC) post-1.0, Story 12 (PECL
-packaging — parked), Story 14 (community + outreach). Story 20b
-(bitwise + logical) to be shaped after 20a wraps. Story 19 done.
+packaging — parked), Story 14 (community + outreach). Story 19,
+Story 20 done. Next pickup per the parity roadmap is the CI-fix
+sprint (triage anything 19c's debug-PHP / 20a / 20b surfaces on
+push), then Story 21 (boolean mask indexing — the architectural
+lift that generalises `offsetGet` / `offsetSet`).
 
-## What just landed (sprint 20a)
+## What just landed (sprint 20b)
+
+Eight new elementwise methods closing Story 20: `bitwiseAnd` /
+`bitwiseOr` / `bitwiseXor` / `bitwiseNot` (4 bitwise; bool + int
+input only, float throws `\DTypeException`) and `logicalAnd` /
+`logicalOr` / `logicalXor` / `logicalNot` (4 logical; any input,
+output always bool, NaN coerces to true).
+
+- **Bitwise** patterned on `numphp_compare` — broadcast shapes,
+  allocate output as promoted dtype, walk via `numphp_nditer`.
+  Float rejection at the dispatch boundary (`bitwise_reject_float`
+  helper in `ops.c`). `bitwiseNot` on bool is logical NOT
+  (`~true === false`); on int it's C-level `~`.
+- **Logical** mirrors bitwise but with element-wise truthy
+  coercion (`read_truthy` helper) and bool output regardless of
+  input dtype. `logicalXor` walks the full inputs (no
+  short-circuit; XOR can't).
+- Method-only API per decision 35 lineage. No `do_operation`
+  expansion in this sprint — risk/reward unattractive right after
+  the sprint 19b-fix compound-assign work.
+- **Decisions 39 + 40** locked: bitwise rejects float; logical
+  always outputs bool.
+
+2 new phpt tests (`068-bitwise`, `069-logical`); 69 → 71 phpt + 1
+FFI skip pass. Build clean at the canonical CFLAGS. Story 20
+file ready to move from `backlog/` → `done/` on wrap.
+
+## What landed in sprint 20a
 
 Six new reductions finishing the bool surface from the reduction
 side: `any` / `all` / `prod` / `nanprod` / `countNonzero` / `ptp`.
-Story 20 1-of-2; bitwise + logical clusters are the 20b sprint.
+Story 20 1-of-2; bitwise + logical clusters were the 20b sprint.
 
 - **`any` / `all`** — short-circuiting OR / AND. Output dtype always
   bool. Non-bool input coerces element-wise (any non-zero → true;
@@ -242,23 +274,20 @@ plan in the main thread (no subagent).
 
 ## Working state of the build
 
-- Source files changed in sprint 20a: `src/ops.h` (5 new enum
-  entries: ANY/ALL/PROD/COUNT_NONZERO/PTP), `src/ops.c`
-  (`reduce_out_dtype` extended; 5 new cases in `reduce_line`;
-  new empty-input identities for ANY/ALL/PROD/COUNT_NONZERO/PTP
-  in `numphp_reduce`), `src/ndarray.c` (6 new PHP_METHOD wrappers
-  + 6 method-table entries; reuses existing `arginfo_reduce`),
-  `tests/064-any-all.phpt` and `tests/065-prod-nanprod-countnonzero-ptp.phpt`,
-  `docs/api/ndarray.md` (new "Boolean and product reductions"
-  section), `docs/concepts/dtypes.md` (reductions table extended),
-  `docs/cheatsheet-numpy.md` (10 new rows), `docs/system.md`
-  (decision 31 amended to cover `prod`/`nanprod`; no new decision
-  number — folded per the sprint plan), `src/numphp.h`
-  (version → 0.0.24).
-- 38 architectural decisions in `docs/system.md` (decision 31
-  amended this sprint — paragraph extended, no new decision
-  number; decision 39 was reserved in the sprint plan but folded
-  into 31 since the rationale is identical).
+- Source files changed in sprint 20b: `src/ops.h` (2 new enums:
+  `numphp_bitwise_op` and `numphp_logical_op`; 4 new function
+  prototypes), `src/ops.c` (`numphp_bitwise` + `numphp_bitwise_not`
+  + `numphp_logical` + `numphp_logical_not` patterned on
+  `numphp_compare`, plus `bitwise_reject_float` and `read_truthy`
+  helpers), `src/ndarray.c` (8 PHP_METHOD wrappers via
+  `do_bitwise_method` + `do_logical_method` dispatchers; new
+  `arginfo_binop_bool` and `arginfo_unop_bool`), 2 new phpt files
+  (`068-bitwise`, `069-logical`), `docs/api/ndarray.md` (new
+  Bitwise + Logical sections), `docs/concepts/dtypes.md` (new
+  bitwise-vs-logical subsection), `docs/cheatsheet-numpy.md`
+  (9 new rows), `docs/system.md` (decisions 39 + 40 written),
+  `src/numphp.h` (version → 0.0.25).
+- 40 architectural decisions in `docs/system.md`.
 - `bench/.venv/` contains numpy 2.4.4. Already gitignored.
 
 ### Quality cadence (CI gates that run on every push/PR)

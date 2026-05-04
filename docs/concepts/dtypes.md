@@ -107,6 +107,21 @@ Reduction ops have their own dtype rules — these are not in the binary-op prom
 
 ---
 
+## Bitwise vs logical: dtype rules
+
+Two clusters added in Story 20b have explicit dtype rules, locked as decisions 39 and 40:
+
+| Cluster | Input rule | Output dtype |
+|---|---|---|
+| `bitwiseAnd` / `Or` / `Xor` / `Not` | float input throws `\DTypeException` (cast to int first) | promotion of inputs within {bool, int32, int64} |
+| `logicalAnd` / `Or` / `Xor` / `Not` | any numeric / bool — coerced element-wise (non-zero → true, NaN → true) | always `bool` |
+
+The bitwise rule matches NumPy's `bitwise_and(float)` raising `TypeError`. The logical rule matches NumPy returning `bool` from `np.logical_*` regardless of input.
+
+**`bitwiseNot` on bool is logical NOT, not C-level `~`** — `bitwiseNot(true) === false`. Matches NumPy `~np.bool_(True)`. Locked by `tests/068-bitwise.phpt`.
+
+---
+
 ## What NumPHP does NOT promote
 
 - **Scalars passed alongside an NDArray** are wrapped in a 0-D temporary and follow the same table. `$arr + 1.5` where `$arr` is `int32` produces `float64` (mixed widths) — same as `$arr + NDArray::full([], 1.5)`.

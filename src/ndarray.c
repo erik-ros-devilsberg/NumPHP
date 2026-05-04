@@ -2302,6 +2302,127 @@ PHP_METHOD(NDArray, le) { do_compare_method(INTERNAL_FUNCTION_PARAM_PASSTHRU, NU
 PHP_METHOD(NDArray, gt) { do_compare_method(INTERNAL_FUNCTION_PARAM_PASSTHRU, NUMPHP_CMP_GT); }
 PHP_METHOD(NDArray, ge) { do_compare_method(INTERNAL_FUNCTION_PARAM_PASSTHRU, NUMPHP_CMP_GE); }
 
+/* ===== bitwise + logical (Story 20b) ===== */
+
+static void do_bitwise_method(INTERNAL_FUNCTION_PARAMETERS, numphp_bitwise_op op,
+                              const char *op_name)
+{
+    zval *op1, *op2;
+    ZEND_PARSE_PARAMETERS_START(2, 2)
+        Z_PARAM_ZVAL(op1)
+        Z_PARAM_ZVAL(op2)
+    ZEND_PARSE_PARAMETERS_END();
+
+    numphp_ndarray *a, *b;
+    int free_a = 0, free_b = 0;
+    if (Z_TYPE_P(op1) == IS_OBJECT
+     && instanceof_function(Z_OBJCE_P(op1), numphp_ndarray_ce)) {
+        a = Z_NDARRAY_P(op1);
+    } else {
+        a = scalar_to_0d_ndarray(op1);
+        free_a = 1;
+    }
+    if (Z_TYPE_P(op2) == IS_OBJECT
+     && instanceof_function(Z_OBJCE_P(op2), numphp_ndarray_ce)) {
+        b = Z_NDARRAY_P(op2);
+    } else {
+        b = scalar_to_0d_ndarray(op2);
+        free_b = 1;
+    }
+
+    numphp_ndarray *out = numphp_bitwise(a, b, op, op_name);
+    if (free_a) numphp_ndarray_free(a);
+    if (free_b) numphp_ndarray_free(b);
+    if (!out) RETURN_THROWS();
+    numphp_zval_wrap_ndarray(return_value, out);
+}
+
+static void do_logical_method(INTERNAL_FUNCTION_PARAMETERS, numphp_logical_op op)
+{
+    zval *op1, *op2;
+    ZEND_PARSE_PARAMETERS_START(2, 2)
+        Z_PARAM_ZVAL(op1)
+        Z_PARAM_ZVAL(op2)
+    ZEND_PARSE_PARAMETERS_END();
+
+    numphp_ndarray *a, *b;
+    int free_a = 0, free_b = 0;
+    if (Z_TYPE_P(op1) == IS_OBJECT
+     && instanceof_function(Z_OBJCE_P(op1), numphp_ndarray_ce)) {
+        a = Z_NDARRAY_P(op1);
+    } else {
+        a = scalar_to_0d_ndarray(op1);
+        free_a = 1;
+    }
+    if (Z_TYPE_P(op2) == IS_OBJECT
+     && instanceof_function(Z_OBJCE_P(op2), numphp_ndarray_ce)) {
+        b = Z_NDARRAY_P(op2);
+    } else {
+        b = scalar_to_0d_ndarray(op2);
+        free_b = 1;
+    }
+
+    numphp_ndarray *out = numphp_logical(a, b, op);
+    if (free_a) numphp_ndarray_free(a);
+    if (free_b) numphp_ndarray_free(b);
+    if (!out) RETURN_THROWS();
+    numphp_zval_wrap_ndarray(return_value, out);
+}
+
+PHP_METHOD(NDArray, bitwiseAnd) { do_bitwise_method(INTERNAL_FUNCTION_PARAM_PASSTHRU, NUMPHP_BIT_AND, "bitwiseAnd"); }
+PHP_METHOD(NDArray, bitwiseOr)  { do_bitwise_method(INTERNAL_FUNCTION_PARAM_PASSTHRU, NUMPHP_BIT_OR,  "bitwiseOr");  }
+PHP_METHOD(NDArray, bitwiseXor) { do_bitwise_method(INTERNAL_FUNCTION_PARAM_PASSTHRU, NUMPHP_BIT_XOR, "bitwiseXor"); }
+
+PHP_METHOD(NDArray, bitwiseNot)
+{
+    zval *op1;
+    ZEND_PARSE_PARAMETERS_START(1, 1)
+        Z_PARAM_ZVAL(op1)
+    ZEND_PARSE_PARAMETERS_END();
+
+    numphp_ndarray *a;
+    int free_a = 0;
+    if (Z_TYPE_P(op1) == IS_OBJECT
+     && instanceof_function(Z_OBJCE_P(op1), numphp_ndarray_ce)) {
+        a = Z_NDARRAY_P(op1);
+    } else {
+        a = scalar_to_0d_ndarray(op1);
+        free_a = 1;
+    }
+
+    numphp_ndarray *out = numphp_bitwise_not(a);
+    if (free_a) numphp_ndarray_free(a);
+    if (!out) RETURN_THROWS();
+    numphp_zval_wrap_ndarray(return_value, out);
+}
+
+PHP_METHOD(NDArray, logicalAnd) { do_logical_method(INTERNAL_FUNCTION_PARAM_PASSTHRU, NUMPHP_LOGICAL_AND); }
+PHP_METHOD(NDArray, logicalOr)  { do_logical_method(INTERNAL_FUNCTION_PARAM_PASSTHRU, NUMPHP_LOGICAL_OR);  }
+PHP_METHOD(NDArray, logicalXor) { do_logical_method(INTERNAL_FUNCTION_PARAM_PASSTHRU, NUMPHP_LOGICAL_XOR); }
+
+PHP_METHOD(NDArray, logicalNot)
+{
+    zval *op1;
+    ZEND_PARSE_PARAMETERS_START(1, 1)
+        Z_PARAM_ZVAL(op1)
+    ZEND_PARSE_PARAMETERS_END();
+
+    numphp_ndarray *a;
+    int free_a = 0;
+    if (Z_TYPE_P(op1) == IS_OBJECT
+     && instanceof_function(Z_OBJCE_P(op1), numphp_ndarray_ce)) {
+        a = Z_NDARRAY_P(op1);
+    } else {
+        a = scalar_to_0d_ndarray(op1);
+        free_a = 1;
+    }
+
+    numphp_ndarray *out = numphp_logical_not(a);
+    if (free_a) numphp_ndarray_free(a);
+    if (!out) RETURN_THROWS();
+    numphp_zval_wrap_ndarray(return_value, out);
+}
+
 /* ===== where ===== */
 
 PHP_METHOD(NDArray, where)
@@ -2631,6 +2752,17 @@ ZEND_BEGIN_ARG_WITH_RETURN_OBJ_INFO_EX(arginfo_where, 0, 3, NDArray, 0)
     ZEND_ARG_INFO(0, y)
 ZEND_END_ARG_INFO()
 
+/* bitwiseAnd / Or / Xor and logicalAnd / Or / Xor: ($a, $b) → NDArray */
+ZEND_BEGIN_ARG_WITH_RETURN_OBJ_INFO_EX(arginfo_binop_bool, 0, 2, NDArray, 0)
+    ZEND_ARG_INFO(0, a)
+    ZEND_ARG_INFO(0, b)
+ZEND_END_ARG_INFO()
+
+/* bitwiseNot / logicalNot: ($a) → NDArray */
+ZEND_BEGIN_ARG_WITH_RETURN_OBJ_INFO_EX(arginfo_unop_bool, 0, 1, NDArray, 0)
+    ZEND_ARG_INFO(0, a)
+ZEND_END_ARG_INFO()
+
 ZEND_BEGIN_ARG_WITH_RETURN_OBJ_INFO_EX(arginfo_reshape, 0, 1, NDArray, 0)
     ZEND_ARG_TYPE_INFO(0, shape, IS_ARRAY, 0)
 ZEND_END_ARG_INFO()
@@ -2804,6 +2936,15 @@ static const zend_function_entry numphp_ndarray_methods[] = {
     PHP_ME(NDArray, gt,    arginfo_compare, ZEND_ACC_PUBLIC | ZEND_ACC_STATIC)
     PHP_ME(NDArray, ge,    arginfo_compare, ZEND_ACC_PUBLIC | ZEND_ACC_STATIC)
     PHP_ME(NDArray, where, arginfo_where,   ZEND_ACC_PUBLIC | ZEND_ACC_STATIC)
+
+    PHP_ME(NDArray, bitwiseAnd, arginfo_binop_bool, ZEND_ACC_PUBLIC | ZEND_ACC_STATIC)
+    PHP_ME(NDArray, bitwiseOr,  arginfo_binop_bool, ZEND_ACC_PUBLIC | ZEND_ACC_STATIC)
+    PHP_ME(NDArray, bitwiseXor, arginfo_binop_bool, ZEND_ACC_PUBLIC | ZEND_ACC_STATIC)
+    PHP_ME(NDArray, bitwiseNot, arginfo_unop_bool,  ZEND_ACC_PUBLIC | ZEND_ACC_STATIC)
+    PHP_ME(NDArray, logicalAnd, arginfo_binop_bool, ZEND_ACC_PUBLIC | ZEND_ACC_STATIC)
+    PHP_ME(NDArray, logicalOr,  arginfo_binop_bool, ZEND_ACC_PUBLIC | ZEND_ACC_STATIC)
+    PHP_ME(NDArray, logicalXor, arginfo_binop_bool, ZEND_ACC_PUBLIC | ZEND_ACC_STATIC)
+    PHP_ME(NDArray, logicalNot, arginfo_unop_bool,  ZEND_ACC_PUBLIC | ZEND_ACC_STATIC)
 
     /* element-wise math (the trailing-underscore C names map to clean PHP names) */
     PHP_MALIAS(NDArray, sqrt,  sqrt_,  arginfo_unary, ZEND_ACC_PUBLIC)

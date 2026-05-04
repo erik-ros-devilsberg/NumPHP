@@ -1102,6 +1102,174 @@ numphp_ndarray *numphp_where(numphp_ndarray *cond,
 }
 
 /* ============================================================================
+ * Bitwise — bool / int input only; reject float at the dispatch boundary
+ * (decision 39). Output dtype = numphp_promote_dtype(a, b) which only
+ * produces {bool, int32, int64} when both inputs are in those dtypes.
+ * Bool ⊕ bool stays bool; bool ⊕ int promotes to int. ============================================================================ */
+
+static int bitwise_reject_float(numphp_ndarray *a, const char *op_name)
+{
+    if (a->dtype == NUMPHP_FLOAT32 || a->dtype == NUMPHP_FLOAT64) {
+        zend_throw_exception_ex(numphp_dtype_exception_ce, 0,
+            "%s: float dtypes not supported (got %s); cast to int first",
+            op_name,
+            a->dtype == NUMPHP_FLOAT32 ? "float32" : "float64");
+        return 0;
+    }
+    return 1;
+}
+
+static inline int64_t bit_compute_int64(int64_t a, int64_t b, numphp_bitwise_op op)
+{
+    switch (op) {
+        case NUMPHP_BIT_AND: return a & b;
+        case NUMPHP_BIT_OR:  return a | b;
+        case NUMPHP_BIT_XOR: return a ^ b;
+    }
+    return 0;
+}
+
+numphp_ndarray *numphp_bitwise(numphp_ndarray *a, numphp_ndarray *b,
+                               numphp_bitwise_op op, const char *op_name)
+{
+    if (!bitwise_reject_float(a, op_name)) return NULL;
+    if (!bitwise_reject_float(b, op_name)) return NULL;
+
+    int out_ndim;
+    zend_long out_shape[NUMPHP_MAX_NDIM];
+    numphp_ndarray *ops[2] = { a, b };
+    if (!numphp_broadcast_shape(2, ops, &out_ndim, out_shape)) return NULL;
+
+    numphp_dtype out_dt = numphp_promote_dtype(a->dtype, b->dtype);
+    numphp_ndarray *out = numphp_ndarray_alloc_owner(out_dt, out_ndim, out_shape);
+
+    numphp_nditer it;
+    if (!numphp_nditer_init(&it, 2, ops, out)) {
+        numphp_ndarray_free(out);
+        return NULL;
+    }
+
+    if (it.size > 0) do {
+        int64_t av = numphp_read_i64(it.ptr[0], a->dtype);
+        int64_t bv = numphp_read_i64(it.ptr[1], b->dtype);
+        int64_t r = bit_compute_int64(av, bv, op);
+        /* numphp_write_scalar_at canonicalises bool to 0/1 — and since bool
+         * inputs read as 0/1, &/|/^ on them stays in {0, 1}, so bool output
+         * naturally stays bool. */
+        numphp_write_scalar_at(it.ptr[2], out_dt, (double)r, (zend_long)r);
+        numphp_nditer_next(&it);
+    } while (!it.done);
+
+    return out;
+}
+
+numphp_ndarray *numphp_bitwise_not(numphp_ndarray *a)
+{
+    if (!bitwise_reject_float(a, "bitwiseNot")) return NULL;
+
+    numphp_ndarray *out = numphp_ndarray_alloc_owner(a->dtype, a->ndim, a->shape);
+    if (out->size == 0) return out;
+
+    char *src_base = (char *)a->buffer->data + a->offset;
+    char *dst = (char *)out->buffer->data;
+    zend_long out_isz = out->itemsize;
+
+    zend_long idx[NUMPHP_MAX_NDIM] = {0};
+    for (zend_long n = 0; n < a->size; n++) {
+        zend_long s_off = 0;
+        for (int j = 0; j < a->ndim; j++) s_off += idx[j] * a->strides[j];
+        int64_t v = numphp_read_i64(src_base + s_off, a->dtype);
+        int64_t r;
+        if (a->dtype == NUMPHP_BOOL) {
+            /* Bool: ~true === false, ~false === true. NumPy match. Don't
+             * use C-level ~ on a {0, 1} byte (would produce -1/-2 then get
+             * canonicalised back to 1 by write_scalar_at — both wrong). */
+            r = (v == 0) ? 1 : 0;
+        } else {
+            /* Int: C-level ~v. The dtype-narrow on write handles int32 wrap. */
+            r = ~v;
+        }
+        numphp_write_scalar_at(dst + n * out_isz, a->dtype, (double)r, (zend_long)r);
+        for (int j = a->ndim - 1; j >= 0; j--) {
+            if (++idx[j] < a->shape[j]) break;
+            idx[j] = 0;
+        }
+    }
+    return out;
+}
+
+/* ============================================================================
+ * Logical — coerce-to-bool input, bool output (decision 40). Any
+ * numeric / bool input accepted. NaN coerces to true (matches NumPy and
+ * (bool)NAN). ============================================================================ */
+
+static inline int read_truthy(const char *p, numphp_dtype dt)
+{
+    if (dt == NUMPHP_FLOAT32 || dt == NUMPHP_FLOAT64) {
+        double v = numphp_read_f64(p, dt);
+        return (v != 0.0) || isnan(v);
+    }
+    return numphp_read_i64(p, dt) != 0;
+}
+
+static inline uint8_t logical_compute(int a, int b, numphp_logical_op op)
+{
+    switch (op) {
+        case NUMPHP_LOGICAL_AND: return (a && b) ? 1 : 0;
+        case NUMPHP_LOGICAL_OR:  return (a || b) ? 1 : 0;
+        case NUMPHP_LOGICAL_XOR: return ((a != 0) ^ (b != 0)) ? 1 : 0;
+    }
+    return 0;
+}
+
+numphp_ndarray *numphp_logical(numphp_ndarray *a, numphp_ndarray *b,
+                               numphp_logical_op op)
+{
+    int out_ndim;
+    zend_long out_shape[NUMPHP_MAX_NDIM];
+    numphp_ndarray *ops[2] = { a, b };
+    if (!numphp_broadcast_shape(2, ops, &out_ndim, out_shape)) return NULL;
+
+    numphp_ndarray *out = numphp_ndarray_alloc_owner(NUMPHP_BOOL, out_ndim, out_shape);
+
+    numphp_nditer it;
+    if (!numphp_nditer_init(&it, 2, ops, out)) {
+        numphp_ndarray_free(out);
+        return NULL;
+    }
+
+    if (it.size > 0) do {
+        int av = read_truthy(it.ptr[0], a->dtype);
+        int bv = read_truthy(it.ptr[1], b->dtype);
+        *(uint8_t *)it.ptr[2] = logical_compute(av, bv, op);
+        numphp_nditer_next(&it);
+    } while (!it.done);
+
+    return out;
+}
+
+numphp_ndarray *numphp_logical_not(numphp_ndarray *a)
+{
+    numphp_ndarray *out = numphp_ndarray_alloc_owner(NUMPHP_BOOL, a->ndim, a->shape);
+    if (out->size == 0) return out;
+
+    char *src_base = (char *)a->buffer->data + a->offset;
+    uint8_t *dst = (uint8_t *)out->buffer->data;
+
+    zend_long idx[NUMPHP_MAX_NDIM] = {0};
+    for (zend_long n = 0; n < a->size; n++) {
+        zend_long s_off = 0;
+        for (int j = 0; j < a->ndim; j++) s_off += idx[j] * a->strides[j];
+        dst[n] = read_truthy(src_base + s_off, a->dtype) ? 0 : 1;
+        for (int j = a->ndim - 1; j >= 0; j--) {
+            if (++idx[j] < a->shape[j]) break;
+            idx[j] = 0;
+        }
+    }
+    return out;
+}
+
+/* ============================================================================
  * Element-wise math
  * ============================================================================ */
 

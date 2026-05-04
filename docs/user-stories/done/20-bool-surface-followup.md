@@ -165,7 +165,7 @@ new numbers — exercise judgement during execution.
     NaN), broadcasting, scalar-on-either-side; output is always bool.
 - **Phpt coverage:** at least 4 new phpt files (one per cluster:
   `064-any-all.phpt`, `065-prod-nanprod.phpt`,
-  `066-bitwise.phpt`, `067-logical.phpt`); existing 67 tests still
+  `068-bitwise.phpt`, `069-logical.phpt`); existing 67 tests still
   pass; doc-snippet harness still green.
 - **Build:** clean at the canonical CFLAGS
   (`-Wall -Wextra -Werror -Wshadow -Wstrict-prototypes

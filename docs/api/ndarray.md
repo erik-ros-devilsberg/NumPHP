@@ -1292,6 +1292,73 @@ Element-wise comparison. All six return a fresh `bool` NDArray of the broadcast 
 
 **Why method-only:** PHP's `==` / `<` / etc. operators are deliberately not overloaded for NDArray. Zend Engine's comparison hook returns a single ordering int, not an element-wise array. Using the explicit method form keeps "compare two arrays" syntactically obvious and unambiguous. Locked by [decision 35](../system.md).
 
+---
+
+## Bitwise ops (static)
+
+Element-wise bitwise. Bool / int input only — float input throws `\DTypeException` (see [decision 39](../system.md)). Output dtype is the promotion of inputs within {bool, int32, int64}.
+
+| Method | NumPy equivalent | Sense |
+|--------|------------------|-------|
+| `NDArray::bitwiseAnd($a, $b)` | `np.bitwise_and` | element-wise `&` |
+| `NDArray::bitwiseOr($a, $b)` | `np.bitwise_or` | element-wise `|` |
+| `NDArray::bitwiseXor($a, $b)` | `np.bitwise_xor` | element-wise `^` |
+| `NDArray::bitwiseNot($a)` | `np.bitwise_not` (or `np.invert`) | element-wise `~` |
+
+**Signatures:**
+- `public static function bitwiseAnd(mixed $a, mixed $b): NDArray`
+- (likewise for `bitwiseOr`, `bitwiseXor`)
+- `public static function bitwiseNot(mixed $a): NDArray`
+
+**Returns:** `NDArray` of the broadcast shape, dtype = promotion of `$a` and `$b` (or input dtype for `bitwiseNot`).
+
+**Throws:** `\DTypeException` if either operand is float; `\ShapeException` on incompatible broadcast.
+
+**Bool semantics for `bitwiseNot`:** `bitwiseNot(true) === false`, `bitwiseNot(false) === true`. Matches NumPy (`~np.bool_(True)` returns `False`); does not produce C-level `~1 === -2`.
+
+```php
+$a = NDArray::fromArray([12, 10, 7], 'int32');
+$b = NDArray::fromArray([10, 6,  3], 'int32');
+print_r(NDArray::bitwiseAnd($a, $b)->toArray());      // [8, 2, 3]
+print_r(NDArray::bitwiseXor($a, $b)->toArray());      // [6, 12, 4]
+
+$mask = NDArray::fromArray([true, false, true], 'bool');
+print_r(NDArray::bitwiseNot($mask)->toArray());       // [false, true, false]
+```
+
+**Why method-only:** same reasoning as comparison ops (see decision 35). Expanding `do_operation` to dispatch `&` / `|` / `^` / `~` is unattractive risk/reward right after the compound-assign refcount fix in sprint 19b-fix; revisit if demand surfaces.
+
+---
+
+## Logical ops (static)
+
+Element-wise logical. Any numeric / bool input — values are coerced element-wise (any non-zero → `true`; **NaN → `true`**, matching NumPy / PHP `(bool)NAN`). **Output dtype is always `bool`** (see [decision 40](../system.md)).
+
+| Method | NumPy equivalent | Sense |
+|--------|------------------|-------|
+| `NDArray::logicalAnd($a, $b)` | `np.logical_and` | bool-coerced AND |
+| `NDArray::logicalOr($a, $b)` | `np.logical_or` | bool-coerced OR |
+| `NDArray::logicalXor($a, $b)` | `np.logical_xor` | bool-coerced XOR (no short-circuit) |
+| `NDArray::logicalNot($a)` | `np.logical_not` | bool-coerced NOT |
+
+**Signatures:** mirror the bitwise group above; output is always `NDArray` of dtype `bool`.
+
+**Throws:** `\ShapeException` on incompatible broadcast. No dtype rejection — float input is accepted.
+
+```php
+$a = NDArray::fromArray([0, 1, 2, 3], 'int32');
+$b = NDArray::fromArray([5, 0, 7, 0], 'int32');
+print_r(NDArray::logicalAnd($a, $b)->toArray());      // [false, false, true, false]
+print_r(NDArray::logicalOr($a, $b)->toArray());       // [true, true, true, true]
+
+$f = NDArray::fromArray([0.0, 1.5, 0.0, NAN]);
+print_r(NDArray::logicalNot($f)->toArray());          // [true, false, true, false] — NaN→true→negate→false
+```
+
+**`logicalXor` short-circuit:** XOR cannot short-circuit by definition (must read both operands to know the result), so it walks the full inputs. `logicalAnd` / `logicalOr` short-circuit element-wise where applicable.
+
+**Bitwise vs logical, in one sentence:** bitwise operates on the dtype's bits and rejects float; logical coerces every input to bool first and always returns bool.
+
 **Example:**
 
 ```php

@@ -132,6 +132,14 @@ Conventions:
 | `a != b` | `NDArray::ne($a, $b)` | NaN-aware: `ne(NAN, NAN)` returns `true` per IEEE 754. |
 | `a < b`, `<=`, `>`, `>=` | `NDArray::lt($a, $b)`, `le`, `gt`, `ge` | All return bool NDArrays. |
 | `np.where(cond, x, y)` | `NDArray::where($cond, $x, $y)` | `$cond` must be bool. Output dtype = promotion of `$x` and `$y`. |
+| `a & b`, `np.bitwise_and(a, b)` | `NDArray::bitwiseAnd($a, $b)` | Bool / int input only. Float throws `\DTypeException`. |
+| `a | b`, `np.bitwise_or(a, b)` | `NDArray::bitwiseOr($a, $b)` | Same dtype rule. |
+| `a ^ b`, `np.bitwise_xor(a, b)` | `NDArray::bitwiseXor($a, $b)` | Same dtype rule. |
+| `~a`, `np.bitwise_not(a)` | `NDArray::bitwiseNot($a)` | Bool input → logical NOT (`~true === false`); int → C-level `~`. |
+| `np.logical_and(a, b)` | `NDArray::logicalAnd($a, $b)` | Any input — coerced to bool element-wise (NaN → true). Output always bool. |
+| `np.logical_or(a, b)` | `NDArray::logicalOr($a, $b)` | Same coercion + bool output. |
+| `np.logical_xor(a, b)` | `NDArray::logicalXor($a, $b)` | No short-circuit (XOR can't). |
+| `np.logical_not(a)` | `NDArray::logicalNot($a)` | Same coercion + bool output. |
 
 ---
 

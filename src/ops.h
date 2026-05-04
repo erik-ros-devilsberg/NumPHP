@@ -71,6 +71,33 @@ typedef enum {
 numphp_ndarray *numphp_compare(numphp_ndarray *a, numphp_ndarray *b,
                                numphp_compare_op op);
 
+/* Element-wise bitwise ops. Bool / int input only; float input throws
+ * \DTypeException (decision 39). Output dtype is the promotion of inputs
+ * within {bool, int32, int64}. bitwiseNot on bool is logical NOT (matches
+ * NumPy: ~np.bool_(True) === False), not C-level ~. */
+typedef enum {
+    NUMPHP_BIT_AND = 0,
+    NUMPHP_BIT_OR,
+    NUMPHP_BIT_XOR,
+} numphp_bitwise_op;
+
+numphp_ndarray *numphp_bitwise(numphp_ndarray *a, numphp_ndarray *b,
+                               numphp_bitwise_op op, const char *op_name);
+numphp_ndarray *numphp_bitwise_not(numphp_ndarray *a);
+
+/* Element-wise logical ops. Any numeric / bool input — coerced to bool
+ * element-wise (any non-zero → true; NaN → true, matching NumPy /
+ * (bool)NAN). Output dtype is always bool (decision 40). */
+typedef enum {
+    NUMPHP_LOGICAL_AND = 0,
+    NUMPHP_LOGICAL_OR,
+    NUMPHP_LOGICAL_XOR,
+} numphp_logical_op;
+
+numphp_ndarray *numphp_logical(numphp_ndarray *a, numphp_ndarray *b,
+                               numphp_logical_op op);
+numphp_ndarray *numphp_logical_not(numphp_ndarray *a);
+
 /* Element-wise select. cond must be NUMPHP_BOOL; output dtype is the promotion
  * of x and y (cond's dtype is irrelevant). Broadcasts across all three. */
 numphp_ndarray *numphp_where(numphp_ndarray *cond,
