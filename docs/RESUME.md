@@ -1,17 +1,16 @@
-# Resume Notes — 2026-05-04 (after sprint 19c)
+# Resume Notes — 2026-05-04 (after sprint 20a)
 
 ## Where we are
 
-**Version 0.0.23.** Pre-release, iterative. Building toward 0.1.0.
+**Version 0.0.24.** Pre-release, iterative. Building toward 0.1.0.
 
-**21 sprints + 1 fix shipped.** Build green at
+**22 sprints + 1 fix shipped.** Build green at
 `-Wall -Wextra -Werror -Wshadow -Wstrict-prototypes -Wmissing-prototypes`
 (sprint 19a); ASan + UBSan + LSan run on every CI build with
 `detect_leaks=1` (sprint 19b + 19b-fix); debug-PHP CI lane runs
 phpt + examples with `ZEND_RC_DEBUG=1` + `ZEND_ALLOC_DEBUG=1` +
-`USE_ZEND_ALLOC=0` (sprint 19c); 67/67 phpt + 1 FFI skip + doc
-snippet harness running ~75+ fenced ```php blocks. **Story 19
-(Build Quality Hardening) closed.**
+`USE_ZEND_ALLOC=0` (sprint 19c); 69/69 phpt + 1 FFI skip + doc
+snippet harness running ~85+ fenced ```php blocks.
 
 | # | Sprint | Stories | Version |
 |---|--------|---------|---------|
@@ -26,12 +25,50 @@ snippet harness running ~75+ fenced ```php blocks. **Story 19
 | 21 | 19b-fix-do-operation-leak | — | 0.0.21 |
 | —  | clean-rule-no-recursive-rm | — | 0.0.22 |
 | 22 | 19c-debug-php (Story 19, Phase C) | 19c | 0.0.23 |
+| 23 | 20a-bool-reductions (Story 20, 1 of 2) | 20a | 0.0.24 |
 
 **Backlog:** Story 11 Phase C (Arrow IPC) post-1.0, Story 12 (PECL
-packaging — parked), Story 14 (community + outreach). Story 19
-done.
+packaging — parked), Story 14 (community + outreach). Story 20b
+(bitwise + logical) to be shaped after 20a wraps. Story 19 done.
 
-## What just landed (sprint 19c)
+## What just landed (sprint 20a)
+
+Six new reductions finishing the bool surface from the reduction
+side: `any` / `all` / `prod` / `nanprod` / `countNonzero` / `ptp`.
+Story 20 1-of-2; bitwise + logical clusters are the 20b sprint.
+
+- **`any` / `all`** — short-circuiting OR / AND. Output dtype always
+  bool. Non-bool input coerces element-wise (any non-zero → true;
+  NaN → true, matching NumPy / `(bool)NAN`). Empty → `any` is
+  false, `all` is true (vacuous truth).
+- **`prod` / `nanprod`** — multiplicative reduction. Decision 31
+  amended (no new decision number) to extend the existing
+  `cumprod` int → int64 promotion rule to `prod` and `nanprod`.
+  Same silent-overflow rationale; same NumPy divergence flag in
+  the cheatsheet. Locked by an explicit overflow-scale assertion
+  in `065-...phpt` (`[100000, 100000, 100000]` of int32 →
+  `1_000_000_000_000_000`, fits int64 but wraps int32).
+- **`countNonzero`** — output dtype always int64. NaN counts as
+  non-zero (matches NumPy: `bool(NAN) === true`).
+- **`ptp`** — `max - min`, preserves input dtype. Bool case:
+  `[true, false]->ptp() === true` (matches NumPy). Empty input
+  throws `\NDArrayException`.
+
+All six reuse the existing `numphp_reduce` machinery — extended
+the enum, added 5 new cases to the `reduce_line` dispatch (PROD
+shares with nanprod via `skip_nan`), updated `reduce_out_dtype`,
+and added 6 thin PHP_METHOD wrappers + arginfo entries. ~280
+lines new C, well under the ~450-line estimate. 2 new phpt files
+(`064-any-all`, `065-prod-nanprod-countnonzero-ptp`); 67 → 69
+phpt + 1 FFI skip.
+
+Local sanitize.sh on Ubuntu 24.04 surfaces pre-existing
+subprocess leaks in `/usr/bin/sed` and `/usr/bin/make` from
+LD_PRELOAD inheriting into child processes — none of the leak
+traces touch numphp/zim_ frames. Verified pre-existing by stash +
+re-run on master. CI sanitizers job is the authoritative gate.
+
+## What landed in sprint 19c
 
 Debug-PHP CI lane. Closes Story 19 (Build Quality Hardening).
 
@@ -205,13 +242,23 @@ plan in the main thread (no subagent).
 
 ## Working state of the build
 
-- Source files changed in sprint 19c: `.github/workflows/ci.yml`
-  (new `debug-php` job — builds PHP `--enable-debug` from source,
-  caches `/opt/php-debug`, runs phpt + examples with
-  `ZEND_RC_DEBUG=1` + `ZEND_ALLOC_DEBUG=1` + `USE_ZEND_ALLOC=0`),
-  `src/numphp.h` (version → 0.0.23), `docs/system.md` (decision 38),
-  `docs/RESUME.md` (this file).
-- 38 architectural decisions in `docs/system.md`.
+- Source files changed in sprint 20a: `src/ops.h` (5 new enum
+  entries: ANY/ALL/PROD/COUNT_NONZERO/PTP), `src/ops.c`
+  (`reduce_out_dtype` extended; 5 new cases in `reduce_line`;
+  new empty-input identities for ANY/ALL/PROD/COUNT_NONZERO/PTP
+  in `numphp_reduce`), `src/ndarray.c` (6 new PHP_METHOD wrappers
+  + 6 method-table entries; reuses existing `arginfo_reduce`),
+  `tests/064-any-all.phpt` and `tests/065-prod-nanprod-countnonzero-ptp.phpt`,
+  `docs/api/ndarray.md` (new "Boolean and product reductions"
+  section), `docs/concepts/dtypes.md` (reductions table extended),
+  `docs/cheatsheet-numpy.md` (10 new rows), `docs/system.md`
+  (decision 31 amended to cover `prod`/`nanprod`; no new decision
+  number — folded per the sprint plan), `src/numphp.h`
+  (version → 0.0.24).
+- 38 architectural decisions in `docs/system.md` (decision 31
+  amended this sprint — paragraph extended, no new decision
+  number; decision 39 was reserved in the sprint plan but folded
+  into 31 since the rationale is identical).
 - `bench/.venv/` contains numpy 2.4.4. Already gitignored.
 
 ### Quality cadence (CI gates that run on every push/PR)

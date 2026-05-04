@@ -37,6 +37,17 @@ static numphp_dtype reduce_out_dtype(numphp_reduce_op op, numphp_dtype in)
         case NUMPHP_REDUCE_ARGMIN:
         case NUMPHP_REDUCE_ARGMAX:
             return NUMPHP_INT64;
+        case NUMPHP_REDUCE_ANY:
+        case NUMPHP_REDUCE_ALL:
+            return NUMPHP_BOOL;
+        case NUMPHP_REDUCE_PROD:
+            /* int / bool → int64 (decision 39, same silent-overflow rationale as decision 31). */
+            if (in == NUMPHP_INT32 || in == NUMPHP_INT64 || in == NUMPHP_BOOL) return NUMPHP_INT64;
+            return in;
+        case NUMPHP_REDUCE_COUNT_NONZERO:
+            return NUMPHP_INT64;
+        case NUMPHP_REDUCE_PTP:
+            return in;
     }
     return in;
 }
@@ -395,6 +406,150 @@ static int reduce_line(const char *p, zend_long stride, zend_long n,
         }
         return 1;
     }
+
+    /* ---- ANY / ALL (short-circuiting) --------------------------------- */
+    case NUMPHP_REDUCE_ANY:
+    case NUMPHP_REDUCE_ALL: {
+        /* Empty input identities: any → false, all → true. */
+        if (n == 0) {
+            numphp_write_scalar_at(out_ptr, dt_out,
+                op == NUMPHP_REDUCE_ALL ? 1.0 : 0.0,
+                op == NUMPHP_REDUCE_ALL ? 1   : 0);
+            return 1;
+        }
+        int is_int = (dt_in == NUMPHP_INT32 || dt_in == NUMPHP_INT64 || dt_in == NUMPHP_BOOL);
+        int result;
+        if (op == NUMPHP_REDUCE_ANY) {
+            result = 0;
+            for (zend_long i = 0; i < n; i++) {
+                int truthy;
+                if (is_int) {
+                    truthy = (numphp_read_i64(p + i * stride, dt_in) != 0);
+                } else {
+                    double v = numphp_read_f64(p + i * stride, dt_in);
+                    /* NaN counts as true — matches NumPy / (bool)NAN. */
+                    truthy = (v != 0.0) || isnan(v);
+                }
+                if (truthy) { result = 1; break; }
+            }
+        } else { /* ALL */
+            result = 1;
+            for (zend_long i = 0; i < n; i++) {
+                int truthy;
+                if (is_int) {
+                    truthy = (numphp_read_i64(p + i * stride, dt_in) != 0);
+                } else {
+                    double v = numphp_read_f64(p + i * stride, dt_in);
+                    truthy = (v != 0.0) || isnan(v);
+                }
+                if (!truthy) { result = 0; break; }
+            }
+        }
+        numphp_write_scalar_at(out_ptr, dt_out, (double)result, result);
+        return 1;
+    }
+
+    /* ---- PROD / nanprod ----------------------------------------------- */
+    case NUMPHP_REDUCE_PROD: {
+        /* Empty: product identity is 1, in output dtype. */
+        if (n == 0) {
+            numphp_write_scalar_at(out_ptr, dt_out, 1.0, 1);
+            return 1;
+        }
+        if (dt_in == NUMPHP_INT32 || dt_in == NUMPHP_INT64 || dt_in == NUMPHP_BOOL) {
+            /* int output is int64; bool reads as 0/1 via numphp_read_i64. */
+            int64_t s = 1;
+            for (zend_long i = 0; i < n; i++) {
+                s *= numphp_read_i64(p + i * stride, dt_in);
+            }
+            numphp_write_scalar_at(out_ptr, dt_out, (double)s, (zend_long)s);
+        } else {
+            /* float: simple fold. NaN propagates by default; skip_nan treats
+             * NaN as identity 1 (same idiom as nansum treating NaN as 0).
+             * If all elements are NaN under skip_nan, result stays 1 (matches
+             * the Story 18 nancumprod all-NaN convention). */
+            double s = 1.0;
+            for (zend_long i = 0; i < n; i++) {
+                double v = numphp_read_f64(p + i * stride, dt_in);
+                if (isnan(v)) {
+                    if (skip_nan) continue;
+                    s = NAN;
+                    break;
+                }
+                s *= v;
+            }
+            numphp_write_scalar_at(out_ptr, dt_out, s, (zend_long)s);
+        }
+        return 1;
+    }
+
+    /* ---- COUNT_NONZERO ------------------------------------------------ */
+    case NUMPHP_REDUCE_COUNT_NONZERO: {
+        int is_int = (dt_in == NUMPHP_INT32 || dt_in == NUMPHP_INT64 || dt_in == NUMPHP_BOOL);
+        int64_t c = 0;
+        for (zend_long i = 0; i < n; i++) {
+            int nonzero;
+            if (is_int) {
+                nonzero = (numphp_read_i64(p + i * stride, dt_in) != 0);
+            } else {
+                double v = numphp_read_f64(p + i * stride, dt_in);
+                /* NaN counts as non-zero (matches NumPy: bool(NAN) === true). */
+                nonzero = (v != 0.0) || isnan(v);
+            }
+            if (nonzero) c++;
+        }
+        numphp_write_scalar_at(out_ptr, dt_out, (double)c, (zend_long)c);
+        return 1;
+    }
+
+    /* ---- PTP (peak-to-peak: max - min) -------------------------------- */
+    case NUMPHP_REDUCE_PTP: {
+        if (n == 0) {
+            zend_throw_exception_ex(numphp_ndarray_exception_ce, 0,
+                "ptp: empty array");
+            return 0;
+        }
+        int is_int = (dt_in == NUMPHP_INT32 || dt_in == NUMPHP_INT64);
+        if (dt_in == NUMPHP_BOOL) {
+            /* Bool: scan for any true and any false; range is true iff both
+             * present. (Matches NumPy: ptp([True, False]) → True.) */
+            int saw_true = 0, saw_false = 0;
+            for (zend_long i = 0; i < n; i++) {
+                int v = (numphp_read_i64(p + i * stride, dt_in) != 0);
+                if (v) saw_true = 1;
+                else   saw_false = 1;
+                if (saw_true && saw_false) break;
+            }
+            int range = (saw_true && saw_false) ? 1 : 0;
+            numphp_write_scalar_at(out_ptr, dt_out, (double)range, range);
+            return 1;
+        }
+        if (is_int) {
+            int64_t lo = numphp_read_i64(p, dt_in);
+            int64_t hi = lo;
+            for (zend_long i = 1; i < n; i++) {
+                int64_t v = numphp_read_i64(p + i * stride, dt_in);
+                if (v < lo) lo = v;
+                if (v > hi) hi = v;
+            }
+            int64_t range = hi - lo;
+            numphp_write_scalar_at(out_ptr, dt_out, (double)range, (zend_long)range);
+        } else {
+            /* Float ptp: NaN propagates (any NaN → result is NaN). */
+            double lo = numphp_read_f64(p, dt_in);
+            double hi = lo;
+            int saw_nan = isnan(lo);
+            for (zend_long i = 1; i < n && !saw_nan; i++) {
+                double v = numphp_read_f64(p + i * stride, dt_in);
+                if (isnan(v)) { saw_nan = 1; break; }
+                if (v < lo) lo = v;
+                if (v > hi) hi = v;
+            }
+            double range = saw_nan ? NAN : (hi - lo);
+            numphp_write_scalar_at(out_ptr, dt_out, range, (zend_long)range);
+        }
+        return 1;
+    }
     } /* switch */
     return 0;
 }
@@ -435,6 +590,11 @@ numphp_ndarray *numphp_reduce(numphp_ndarray *src, numphp_reduce_op op,
                 op == NUMPHP_REDUCE_ARGMIN ? "argmin" : "argmax");
             return NULL;
         }
+        if (op == NUMPHP_REDUCE_PTP) {
+            zend_throw_exception_ex(numphp_ndarray_exception_ce, 0,
+                "ptp: empty array");
+            return NULL;
+        }
         /* Build 0-D or all-1 keepdims output */
         zend_long shape[NUMPHP_MAX_NDIM] = {0};
         int ndim_out;
@@ -446,9 +606,13 @@ numphp_ndarray *numphp_reduce(numphp_ndarray *src, numphp_reduce_op op,
         }
         numphp_ndarray *out = numphp_ndarray_alloc_owner(out_dt, ndim_out, shape);
         char *o = (char *)out->buffer->data;
-        if (op == NUMPHP_REDUCE_SUM)       numphp_write_scalar_at(o, out_dt, 0.0, 0);
-        else if (op == NUMPHP_REDUCE_MEAN) numphp_write_scalar_at(o, out_dt, NAN, 0);
-        else                               numphp_write_scalar_at(o, out_dt, NAN, 0);
+        if      (op == NUMPHP_REDUCE_SUM)            numphp_write_scalar_at(o, out_dt, 0.0, 0);
+        else if (op == NUMPHP_REDUCE_MEAN)           numphp_write_scalar_at(o, out_dt, NAN, 0);
+        else if (op == NUMPHP_REDUCE_PROD)           numphp_write_scalar_at(o, out_dt, 1.0, 1);
+        else if (op == NUMPHP_REDUCE_ANY)            numphp_write_scalar_at(o, out_dt, 0.0, 0);
+        else if (op == NUMPHP_REDUCE_ALL)            numphp_write_scalar_at(o, out_dt, 1.0, 1);
+        else if (op == NUMPHP_REDUCE_COUNT_NONZERO)  numphp_write_scalar_at(o, out_dt, 0.0, 0);
+        else                                         numphp_write_scalar_at(o, out_dt, NAN, 0);
         return out;
     }
 
@@ -515,7 +679,7 @@ numphp_ndarray *numphp_reduce(numphp_ndarray *src, numphp_reduce_op op,
     zend_long outer_total = (axis_n > 0) ? (src->size / axis_n) : 0;
 
     if (axis_n == 0) {
-        /* Reducing along a zero-length axis. argmin/argmax → throw. Others fill identity / NaN. */
+        /* Reducing along a zero-length axis. argmin/argmax/ptp → throw. Others fill identity. */
         if (op == NUMPHP_REDUCE_ARGMIN || op == NUMPHP_REDUCE_ARGMAX) {
             zend_throw_exception_ex(numphp_ndarray_exception_ce, 0,
                 "%s: zero-length reduction axis",
@@ -524,11 +688,22 @@ numphp_ndarray *numphp_reduce(numphp_ndarray *src, numphp_reduce_op op,
             if (owns_contig) numphp_ndarray_free(contig);
             return NULL;
         }
+        if (op == NUMPHP_REDUCE_PTP) {
+            zend_throw_exception_ex(numphp_ndarray_exception_ce, 0,
+                "ptp: zero-length reduction axis");
+            numphp_ndarray_free(out);
+            if (owns_contig) numphp_ndarray_free(contig);
+            return NULL;
+        }
         zend_long out_size = out->size;
         for (zend_long n = 0; n < out_size; n++) {
             char *o = out_base + n * out_itemsize;
-            if (op == NUMPHP_REDUCE_SUM) numphp_write_scalar_at(o, out_dt, 0.0, 0);
-            else                          numphp_write_scalar_at(o, out_dt, NAN, 0);
+            if      (op == NUMPHP_REDUCE_SUM)            numphp_write_scalar_at(o, out_dt, 0.0, 0);
+            else if (op == NUMPHP_REDUCE_PROD)           numphp_write_scalar_at(o, out_dt, 1.0, 1);
+            else if (op == NUMPHP_REDUCE_ANY)            numphp_write_scalar_at(o, out_dt, 0.0, 0);
+            else if (op == NUMPHP_REDUCE_ALL)            numphp_write_scalar_at(o, out_dt, 1.0, 1);
+            else if (op == NUMPHP_REDUCE_COUNT_NONZERO)  numphp_write_scalar_at(o, out_dt, 0.0, 0);
+            else                                          numphp_write_scalar_at(o, out_dt, NAN, 0);
         }
         if (owns_contig) numphp_ndarray_free(contig);
         return out;

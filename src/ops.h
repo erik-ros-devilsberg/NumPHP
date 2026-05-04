@@ -14,6 +14,14 @@ typedef enum {
     NUMPHP_REDUCE_STD,
     NUMPHP_REDUCE_ARGMIN,
     NUMPHP_REDUCE_ARGMAX,
+    /* Story 20a additions. PROD shares the skip_nan flag (nanprod == PROD + skip_nan,
+     * same idiom as nansum). ANY/ALL output bool; COUNT_NONZERO outputs int64;
+     * PTP preserves input dtype (including bool: true - false === true). */
+    NUMPHP_REDUCE_ANY,
+    NUMPHP_REDUCE_ALL,
+    NUMPHP_REDUCE_PROD,
+    NUMPHP_REDUCE_COUNT_NONZERO,
+    NUMPHP_REDUCE_PTP,
 } numphp_reduce_op;
 
 /* Reduce `src` along `axis` (or globally if has_axis = 0).

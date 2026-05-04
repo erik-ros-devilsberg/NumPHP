@@ -1136,6 +1136,133 @@ print_r($x->nancumsum()->toArray());        // [1, 1, 4, 8]
 
 ---
 
+## Boolean and product reductions
+
+Six more reductions matching the surface from Story 17 (bool dtype + comparisons + `where`): `any`, `all`, `prod`, `nanprod`, `countNonzero`, `ptp`. All accept the same `(?int $axis = null, bool $keepdims = false)` signature as the other reductions. With `axis === null` the result is a scalar; with an integer `axis` it's an `NDArray`.
+
+### NDArray::any(): bool|NDArray
+
+Short-circuiting OR over the array.
+
+**Signature:** `public function any(?int $axis = null, bool $keepdims = false): bool|NDArray`
+
+**Returns:** `bool` (axis omitted) or `NDArray` of dtype `bool` with the reduced shape.
+
+**Throws:** `\ShapeException` on out-of-range axis.
+
+**Coercion:** non-bool input is coerced element-wise — any non-zero numeric → `true`; **NaN → `true`** (matches NumPy and PHP `(bool)NAN`). Output is always bool.
+
+**Empty input:** `any` of an empty array is **`false`**.
+
+```php
+$mask = NDArray::fromArray([true, false, true], 'bool');
+var_dump($mask->any());                       // bool(true)
+
+$grid = NDArray::fromArray([[0, 0], [1, 0]], 'int32');
+print_r($grid->any(0)->toArray());            // [true, false]
+```
+
+### NDArray::all(): bool|NDArray
+
+Short-circuiting AND over the array. Mirror of `any`.
+
+**Signature:** `public function all(?int $axis = null, bool $keepdims = false): bool|NDArray`
+
+**Returns:** `bool` or `NDArray` of dtype `bool`.
+
+**Empty input:** `all` of an empty array is **`true`** (vacuous truth, matches NumPy).
+
+```php
+$ones = NDArray::fromArray([true, true, true], 'bool');
+var_dump($ones->all());                       // bool(true)
+```
+
+### NDArray::prod(): mixed
+
+Multiplicative reduction.
+
+**Signature:** `public function prod(?int $axis = null, bool $keepdims = false): mixed`
+
+**Returns:** scalar (axis omitted) or `NDArray`. Output dtype:
+
+| Input | Output |
+|---|---|
+| `bool`, `int32`, `int64` | `int64` (**Diverges** from NumPy — see [decision 31](../system.md)) |
+| `float32` | `float32` |
+| `float64` | `float64` |
+
+**Why int → int64:** silent-overflow protection. Three int32 multiplications can already overflow; promoting to int64 keeps mid-pipeline values honest.
+
+**NaN policy:** any NaN in the input propagates — result is NaN.
+
+**Empty input:** `prod` of an empty array is **`1`** (multiplicative identity), in the output dtype.
+
+```php
+$a = NDArray::fromArray([1, 2, 3, 4]);
+var_dump($a->prod());                         // int(24)
+
+$m = NDArray::fromArray([[1, 2], [3, 4]]);
+print_r($m->prod(0)->toArray());              // [3, 8]
+```
+
+### NDArray::nanprod(): mixed
+
+NaN-skipping `prod`. NaN values are treated as the multiplicative identity (`1`).
+
+**Signature:** `public function nanprod(?int $axis = null, bool $keepdims = false): mixed`
+
+**All-NaN slice:** returns `1` (no exception). Symmetric with `nansum` returning `0` and `nancumprod` returning all-`1`.
+
+For integer dtypes, `nanprod` aliases `prod` (no NaN possible).
+
+```php
+$x = NDArray::fromArray([2.0, NAN, 3.0]);
+var_dump($x->prod());                         // float(NAN)
+var_dump($x->nanprod());                      // float(6) — NaN treated as 1
+```
+
+### NDArray::countNonzero(): int|NDArray
+
+Counts non-zero (or non-`false`) elements.
+
+**Signature:** `public function countNonzero(?int $axis = null, bool $keepdims = false): int|NDArray`
+
+**Returns:** `int` (axis omitted) or `NDArray` of dtype `int64`.
+
+**NaN counts as non-zero** (matches NumPy: `bool(NAN) === true`).
+
+```php
+$ar = NDArray::fromArray([0, 1, 0, 2, 3, 0]);
+var_dump($ar->countNonzero());                // int(3)
+
+$bool = NDArray::fromArray([true, false, true, true], 'bool');
+var_dump($bool->countNonzero());              // int(3)
+```
+
+### NDArray::ptp(): mixed
+
+Peak-to-peak: `max - min` along the axis (or globally).
+
+**Signature:** `public function ptp(?int $axis = null, bool $keepdims = false): mixed`
+
+**Returns:** scalar or `NDArray`. Output dtype = input dtype (no promotion).
+
+**Bool input:** `true - false` is `true` (matches NumPy). All-same-value → `false`.
+
+**NaN policy:** any NaN in the input → result is NaN.
+
+**Empty input:** throws `\NDArrayException` ("ptp: empty array"). Same shape as `argmin` / `argmax` on empty arrays.
+
+```php
+$a = NDArray::fromArray([1, 5, 3, 9, 2]);
+var_dump($a->ptp());                          // int(8)
+
+$m = NDArray::fromArray([[1, 5, 9], [2, 3, 4]]);
+print_r($m->ptp(0)->toArray());               // [1, 2, 5]
+```
+
+---
+
 ## Comparison ops (static)
 
 Element-wise comparison. All six return a fresh `bool` NDArray of the broadcast shape. Inputs are promoted to a common dtype before comparing. Scalars are accepted on either side.

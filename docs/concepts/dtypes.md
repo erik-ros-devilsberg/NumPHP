@@ -83,7 +83,7 @@ This is wider than the elementwise table because BLAS has no integer routines. I
 
 ## Reductions: a separate table
 
-Reduction ops (`sum`, `mean`, `var`, `std`, `argmin`, `argmax`, `cumsum`, `cumprod`) have their own dtype rules — these are not in the binary-op promotion table.
+Reduction ops have their own dtype rules — these are not in the binary-op promotion table.
 
 | Op | bool input | int input | f32 input | f64 input |
 |----|-----------|-----------|-----------|-----------|
@@ -92,10 +92,16 @@ Reduction ops (`sum`, `mean`, `var`, `std`, `argmin`, `argmax`, `cumsum`, `cumpr
 | `min`, `max` | bool | preserve | preserve | preserve |
 | `argmin`, `argmax` | int64 | int64 | int64 | int64 |
 | `cumsum`, `cumprod` | int64 | int64 | f32 | f64 |
+| `prod`, `nanprod` | int64 | int64 | f32 | f64 |
+| `any`, `all` | bool | bool | bool | bool |
+| `countNonzero` | int64 | int64 | int64 | int64 |
+| `ptp` | bool | preserve | preserve | preserve |
 
 `sum` of int promotes to `int64` to avoid silent overflow when accumulating an `int32` input. `argmin` / `argmax` always return `int64` regardless of input dtype. See [decision 9](../system.md) for the full reasoning.
 
-`cumsum` / `cumprod` follow the same int-promotion logic. **`cumprod` on integer input is a deliberate divergence from NumPy** — NumPy preserves the input dtype, NumPHP returns `int64` for consistency with `cumsum` and `sum`. See [decision 31](../system.md).
+`cumsum` / `cumprod` / `prod` / `nanprod` follow the same int-promotion logic. **`cumprod` and `prod` on integer input are deliberate divergences from NumPy** — NumPy preserves the input dtype, NumPHP returns `int64` for consistency with `cumsum` and `sum`. See [decision 31](../system.md).
+
+`any` / `all` always output bool — non-bool input is coerced element-wise (any non-zero → true; NaN → true). `countNonzero` always outputs int64 to count without overflow concerns. `ptp` preserves the input dtype, including bool (`true - false === true`).
 
 `bool` flows through reductions as if it were below `int32` — `sum` counts the trues as `int64`, `mean` returns the proportion of trues as `f64`, `min` / `max` preserve bool. See [decision 34](../system.md).
 

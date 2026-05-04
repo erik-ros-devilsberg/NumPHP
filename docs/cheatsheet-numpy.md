@@ -113,6 +113,14 @@ Conventions:
 | `np.cumprod(a)` | `$a->cumprod()` | **Diverges**: integer input promotes to `int64` (NumPy preserves input dtype). |
 | `np.nancumsum(a)` | `$a->nancumsum()` | NaN treated as 0. |
 | `np.nancumprod(a)` | `$a->nancumprod()` | NaN treated as 1. |
+| `np.prod(a)` | `$a->prod()` | **Diverges**: integer input promotes to `int64` (NumPy preserves input dtype). |
+| `np.prod(a, axis=0)` | `$a->prod(0)` | |
+| `np.nanprod(a)` | `$a->nanprod()` | NaN treated as 1. All-NaN slice → 1, no exception. |
+| `np.any(a)` | `$a->any()` | Output is always bool. NaN → true. Empty → false. |
+| `np.all(a)` | `$a->all()` | Output is always bool. NaN → true. Empty → true (vacuous). |
+| `np.count_nonzero(a)` | `$a->countNonzero()` | Output is always int64. NaN counts as non-zero. |
+| `np.ptp(a)` | `$a->ptp()` | Peak-to-peak (max - min). Empty → throws `\NDArrayException`. |
+| `np.ptp(a, axis=0)` | `$a->ptp(0)` | |
 
 ---
 

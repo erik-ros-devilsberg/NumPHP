@@ -2221,6 +2221,14 @@ PHP_METHOD(NDArray, nanstd)     { do_reduce_method(INTERNAL_FUNCTION_PARAM_PASST
 PHP_METHOD(NDArray, nanargmin)  { do_reduce_method(INTERNAL_FUNCTION_PARAM_PASSTHRU, NUMPHP_REDUCE_ARGMIN, 1); }
 PHP_METHOD(NDArray, nanargmax)  { do_reduce_method(INTERNAL_FUNCTION_PARAM_PASSTHRU, NUMPHP_REDUCE_ARGMAX, 1); }
 
+/* Sprint 20a — bool-surface reductions */
+PHP_METHOD(NDArray, any)          { do_reduce_method(INTERNAL_FUNCTION_PARAM_PASSTHRU, NUMPHP_REDUCE_ANY,           0); }
+PHP_METHOD(NDArray, all)          { do_reduce_method(INTERNAL_FUNCTION_PARAM_PASSTHRU, NUMPHP_REDUCE_ALL,           0); }
+PHP_METHOD(NDArray, prod)         { do_reduce_method(INTERNAL_FUNCTION_PARAM_PASSTHRU, NUMPHP_REDUCE_PROD,          0); }
+PHP_METHOD(NDArray, nanprod)      { do_reduce_method(INTERNAL_FUNCTION_PARAM_PASSTHRU, NUMPHP_REDUCE_PROD,          1); }
+PHP_METHOD(NDArray, countNonzero) { do_reduce_method(INTERNAL_FUNCTION_PARAM_PASSTHRU, NUMPHP_REDUCE_COUNT_NONZERO, 0); }
+PHP_METHOD(NDArray, ptp)          { do_reduce_method(INTERNAL_FUNCTION_PARAM_PASSTHRU, NUMPHP_REDUCE_PTP,           0); }
+
 /* ===== cumulative reductions ===== */
 
 static void do_cumulative_method(INTERNAL_FUNCTION_PARAMETERS, numphp_cumulative_op op, int skip_nan)
@@ -2776,6 +2784,13 @@ static const zend_function_entry numphp_ndarray_methods[] = {
     PHP_ME(NDArray, nanstd,    arginfo_var_std, ZEND_ACC_PUBLIC)
     PHP_ME(NDArray, nanargmin, arginfo_reduce,  ZEND_ACC_PUBLIC)
     PHP_ME(NDArray, nanargmax, arginfo_reduce,  ZEND_ACC_PUBLIC)
+
+    PHP_ME(NDArray, any,          arginfo_reduce, ZEND_ACC_PUBLIC)
+    PHP_ME(NDArray, all,          arginfo_reduce, ZEND_ACC_PUBLIC)
+    PHP_ME(NDArray, prod,         arginfo_reduce, ZEND_ACC_PUBLIC)
+    PHP_ME(NDArray, nanprod,      arginfo_reduce, ZEND_ACC_PUBLIC)
+    PHP_ME(NDArray, countNonzero, arginfo_reduce, ZEND_ACC_PUBLIC)
+    PHP_ME(NDArray, ptp,          arginfo_reduce, ZEND_ACC_PUBLIC)
 
     PHP_ME(NDArray, cumsum,     arginfo_cumulative, ZEND_ACC_PUBLIC)
     PHP_ME(NDArray, cumprod,    arginfo_cumulative, ZEND_ACC_PUBLIC)
