@@ -121,6 +121,86 @@ jobs:
           export LD_PRELOAD="$(gcc -print-file-name=libasan.so):$(gcc -print-file-name=libubsan.so)"
           make test
 
+  debug-php:
+    name: Debug PHP + ZEND_RC_DEBUG
+    runs-on: ubuntu-latest
+    env:
+      PHP_VERSION: '8.3.13'
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install build deps
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libopenblas-dev liblapack-dev \
+            libxml2-dev libsqlite3-dev \
+            pkg-config bison re2c
+
+      - name: Cache debug PHP build
+        id: cache-debug-php
+        uses: actions/cache@v4
+        with:
+          path: /opt/php-debug
+          key: php-debug-${{ env.PHP_VERSION }}-v1
+
+      - name: Build debug PHP from source
+        if: steps.cache-debug-php.outputs.cache-hit != 'true'
+        run: |
+          cd /tmp
+          wget -q "https://www.php.net/distributions/php-${PHP_VERSION}.tar.xz"
+          tar xf "php-${PHP_VERSION}.tar.xz"
+          cd "php-${PHP_VERSION}"
+          # --enable-debug enables ZEND_DEBUG which gates ZEND_RC_DEBUG +
+          # ZEND_ALLOC_DEBUG + the engine assertion suite. Minimal extension
+          # set: json (built-in PHP 8), hash, ctype, dom, sqlite3, libxml are
+          # default-enabled and cover everything our phpt tests use. FFI is
+          # not enabled — tests skip-if-not-loaded, matching the release lane.
+          ./configure --prefix=/opt/php-debug \
+            --enable-debug \
+            --without-pear \
+            --disable-cgi --disable-fpm --disable-phpdbg
+          make -j"$(nproc)"
+          sudo make install
+
+      - name: Put debug PHP on PATH
+        run: |
+          echo "/opt/php-debug/bin" >> "$GITHUB_PATH"
+
+      - name: Verify debug PHP
+        run: |
+          which php
+          php -v
+          # Expect "(... DEBUG ...)" in the version banner — fail fast if not.
+          php -v | grep -q DEBUG
+
+      - name: Build numphp against debug PHP
+        # -O0 because debug PHP runs slow anyway and -O0 keeps line numbers
+        # in any abort traces useful. Otherwise the canonical flag set.
+        run: |
+          phpize
+          ./configure --enable-numphp
+          make CFLAGS="-Wall -Wextra -Werror -Wshadow -Wstrict-prototypes -Wmissing-prototypes -O0 -g"
+
+      - name: Run phpt under debug PHP
+        env:
+          ZEND_RC_DEBUG: '1'
+          ZEND_ALLOC_DEBUG: '1'
+          USE_ZEND_ALLOC: '0'
+        run: make test TESTS="--show-diff"
+
+      - name: Run examples and diff against .expected
+        env:
+          ZEND_RC_DEBUG: '1'
+          ZEND_ALLOC_DEBUG: '1'
+          USE_ZEND_ALLOC: '0'
+        run: |
+          set -e
+          for f in examples/*.php; do
+            echo "=== $f ==="
+            diff <(php -d extension=./modules/numphp.so "$f") "${f%.php}.expected"
+          done
+
   coverage:
     name: gcov (non-blocking — informational)
     runs-on: ubuntu-latest

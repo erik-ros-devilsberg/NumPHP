@@ -1,14 +1,17 @@
-# Resume Notes — 2026-05-03 (after sprint 19b-fix + clean-rule fix)
+# Resume Notes — 2026-05-04 (after sprint 19c)
 
 ## Where we are
 
-**Version 0.0.22.** Pre-release, iterative. Building toward 0.1.0.
+**Version 0.0.23.** Pre-release, iterative. Building toward 0.1.0.
 
-**20 sprints + 1 fix shipped.** Build green at
+**21 sprints + 1 fix shipped.** Build green at
 `-Wall -Wextra -Werror -Wshadow -Wstrict-prototypes -Wmissing-prototypes`
 (sprint 19a); ASan + UBSan + LSan run on every CI build with
-`detect_leaks=1` (sprint 19b + 19b-fix); 67/67 phpt + 1 FFI skip
-+ doc-snippet harness running ~75+ fenced ```php blocks.
+`detect_leaks=1` (sprint 19b + 19b-fix); debug-PHP CI lane runs
+phpt + examples with `ZEND_RC_DEBUG=1` + `ZEND_ALLOC_DEBUG=1` +
+`USE_ZEND_ALLOC=0` (sprint 19c); 67/67 phpt + 1 FFI skip + doc
+snippet harness running ~75+ fenced ```php blocks. **Story 19
+(Build Quality Hardening) closed.**
 
 | # | Sprint | Stories | Version |
 |---|--------|---------|---------|
@@ -22,12 +25,37 @@
 | 20 | 19b-asan-ubsan (Story 19, Phase B) | 19b | 0.0.20 |
 | 21 | 19b-fix-do-operation-leak | — | 0.0.21 |
 | —  | clean-rule-no-recursive-rm | — | 0.0.22 |
+| 22 | 19c-debug-php (Story 19, Phase C) | 19c | 0.0.23 |
 
 **Backlog:** Story 11 Phase C (Arrow IPC) post-1.0, Story 12 (PECL
-packaging — parked), Story 14 (community + outreach), Story 19
-Phase C (debug PHP + `ZEND_RC_DEBUG`).
+packaging — parked), Story 14 (community + outreach). Story 19
+done.
 
-## What just landed (sprint 19b-fix)
+## What just landed (sprint 19c)
+
+Debug-PHP CI lane. Closes Story 19 (Build Quality Hardening).
+
+- **New `debug-php` CI job** in `.github/workflows/ci.yml`. PHP
+  built from source with `--enable-debug` (cached in
+  `/opt/php-debug` keyed by version) — `shivammathur/setup-php`
+  doesn't expose a debug variant. Build deps minimal:
+  `libxml2-dev libsqlite3-dev pkg-config bison re2c`. Cold-cache
+  build is ~5–8 min; warm-cache is seconds.
+- **Test env:** `ZEND_RC_DEBUG=1`, `ZEND_ALLOC_DEBUG=1`,
+  `USE_ZEND_ALLOC=0`. Runs phpt + examples-vs-`.expected` diff.
+- **What this catches that ASan/UBSan/valgrind can't:** refcount
+  leaks that aren't memory leaks (forgotten `zval_ptr_dtor`),
+  refcount underflows that don't yet crash, persistent vs
+  request-scoped confusion, and the engine's `ZEND_ASSERT`
+  suite. Surface area in NumPHP that benefits: every
+  `PHP_METHOD` returning a new NDArray (comparisons, `where`,
+  reductions, shape ops, slice/concatenate), the class object
+  handlers, `fromArray` / `toArray` traversal, and error paths
+  that `RETURN_THROWS()` after partial setup.
+- **Decision 38** locked: debug-PHP CI is the gate; local dev
+  unaffected.
+
+## What landed in sprint 19b-fix
 
 Closed the do_operation compound-assign leak. LSan flipped on in
 CI.
@@ -177,16 +205,26 @@ plan in the main thread (no subagent).
 
 ## Working state of the build
 
-- Source files changed in sprint 19b-fix: `src/ndarray.c`
-  (GMP-idiom outer wrapper around `numphp_do_operation`),
-  `lsan.supp` (new), `.github/workflows/ci.yml` (sanitizers
-  job env vars flipped to `detect_leaks=1` +
-  `LSAN_OPTIONS=suppressions=lsan.supp`), `scripts/sanitize.sh`
-  (same flip), `src/numphp.h` (version).
-- 37 architectural decisions in `docs/system.md` (decision 37
-  amended this sprint — paragraph rewritten, no new decision
-  number).
+- Source files changed in sprint 19c: `.github/workflows/ci.yml`
+  (new `debug-php` job — builds PHP `--enable-debug` from source,
+  caches `/opt/php-debug`, runs phpt + examples with
+  `ZEND_RC_DEBUG=1` + `ZEND_ALLOC_DEBUG=1` + `USE_ZEND_ALLOC=0`),
+  `src/numphp.h` (version → 0.0.23), `docs/system.md` (decision 38),
+  `docs/RESUME.md` (this file).
+- 38 architectural decisions in `docs/system.md`.
 - `bench/.venv/` contains numpy 2.4.4. Already gitignored.
+
+### Quality cadence (CI gates that run on every push/PR)
+
+- `build-test` matrix (PHP 8.2/8.3/8.4) — release build.
+- `examples` — runs all `examples/*.php`, diffs against `.expected`.
+- `valgrind` — phpt under valgrind (`-O0 -g`, `USE_ZEND_ALLOC=0`).
+- `sanitizers` — phpt under ASan + UBSan + LSan with
+  `detect_leaks=1` and `lsan.supp`.
+- `debug-php` — phpt + examples under debug-built PHP with
+  `ZEND_RC_DEBUG=1` + `ZEND_ALLOC_DEBUG=1`.
+- `coverage` — informational gcov, `continue-on-error: true`.
+- `macos` — release build on macOS (Accelerate).
 
 ## Known minor follow-ups (not blocking)
 

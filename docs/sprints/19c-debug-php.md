@@ -1,10 +1,18 @@
 ---
 sprint: 19c-debug-php
 story: 19-build-quality-hardening (3 of 3)
-date: 2026-05-03
-version_target: 0.0.21
-depends_on: 19b-asan-ubsan
+date: 2026-05-04
+version_target: 0.0.23
+depends_on: 19b-asan-ubsan, 19b-fix-do-operation-leak
 ---
+
+> **Note (refreshed 2026-05-04):** plan was originally drafted 2026-05-03
+> targeting 0.0.21. Since then `19b-fix-do-operation-leak` shipped at
+> 0.0.21 (closed the compound-assign leak, flipped LSan on, amended
+> decision 37 in place) and `clean-rule-no-recursive-rm` shipped at
+> 0.0.22. Current head is **0.0.22**, so this sprint targets **0.0.23**.
+> Decision number for the new debug-PHP policy is still **38** — 19b-fix
+> amended 37 rather than allocating a new number.
 
 ## Goal
 
@@ -79,7 +87,7 @@ By end of sprint:
 
 ### Version
 
-13. Bump `src/numphp.h` to `0.0.21`.
+13. Bump `src/numphp.h` from `0.0.22` to `0.0.23`.
 
 ## Out of scope
 
@@ -129,7 +137,7 @@ By end of sprint:
   in sprint outcome.
 - `docs/system.md` decision 38 written.
 - `docs/RESUME.md` quality cadence updated.
-- `src/numphp.h` → `0.0.21`.
+- `src/numphp.h` → `0.0.23`.
 - Story 19 moved to `done/`.
 
 ## Risk register

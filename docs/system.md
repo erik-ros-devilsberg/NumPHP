@@ -412,6 +412,70 @@ locally before push. The existing valgrind CI job (`-O0 -g` build,
 `TEST_PHP_ARGS=-m`) stays in place — different bug-shapes, no
 overlap with ASan worth eliminating.
 
+### 2026-05-04 — Sprint: Build Quality Hardening — Debug PHP + ZEND_RC_DEBUG (Story 19, Phase C)
+
+#### 38. Debug-PHP CI policy: refcount-protocol + engine-assertion gate
+
+NumPHP runs the phpt suite + examples diff against a
+debug-built PHP in a dedicated CI job (`debug-php`) on every
+push and PR. The PHP binary is built from source with
+`--enable-debug` (which gates `ZEND_DEBUG`, `ZEND_RC_DEBUG`,
+`ZEND_ALLOC_DEBUG`, and the engine's `ZEND_ASSERT` suite),
+cached in `/opt/php-debug` keyed by PHP version, and put on
+`PATH` ahead of the runner default. Test step env:
+
+```
+ZEND_RC_DEBUG=1
+ZEND_ALLOC_DEBUG=1
+USE_ZEND_ALLOC=0
+```
+
+**What this catches that ASan / UBSan / valgrind don't:**
+
+- **Refcount leaks that aren't memory leaks** — a forgotten
+  `zval_ptr_dtor` on a return path. ASan/valgrind say "freed
+  at shutdown, fine." Debug PHP says "leaked refcount" with a
+  trace.
+- **Refcount underflows that don't yet crash** — extra
+  `Z_DELREF` on a zval that still has other holders. Latent
+  bug, silent under sanitizers.
+- **Persistent vs request-scoped confusion** — `pemalloc(...,1)`
+  values being refcounted as if request-scoped.
+- **Engine assertions** — the thousands of `ZEND_ASSERT`
+  macros throughout the engine that fire on protocol
+  violations.
+
+**Setup choice:** `shivammathur/setup-php@v2` does not expose a
+debug variant, so the job builds PHP from source. Build deps
+are minimal (`libxml2-dev libsqlite3-dev pkg-config bison
+re2c`) — XML/DOM/sqlite3 are PHP 8 default-on extensions our
+tests touch transitively (json built-in, FFI skips when not
+loaded). `actions/cache@v4` keys on PHP version + a manual
+`-vN` salt, so cache invalidation is explicit. Cold-cache
+build is ~5–8 min; warm-cache hit is seconds.
+
+**Why `-O0 -g` for the extension build:** debug PHP is slow
+anyway, and `-O0` keeps line numbers in any abort traces
+useful. Otherwise the canonical 19a flag set
+(`-Wall -Wextra -Werror -Wshadow -Wstrict-prototypes
+-Wmissing-prototypes`) applies.
+
+**Local dev unaffected.** No debug PHP required on the dev
+machine; CI is the gate. The local `scripts/sanitize.sh` /
+`scripts/memcheck.sh` cover overflow/UAF/UB/memory-leak shapes
+that are far more common in this codebase. Refcount-protocol
+violations are rare enough that catching them on every CI
+run, not on every local rebuild, is the right cost ratio.
+
+**How to apply:** any PR that touches `PHP_METHOD` return
+paths, zval construction (`object_init_ex`, `ZVAL_ARR`,
+`RETURN_*`), refcount manipulation (`Z_ADDREF`, `Z_DELREF`,
+`zval_ptr_dtor`), or the `do_operation` dispatch must
+pass the `debug-php` job. EXPECTF widening for debug-build
+shutdown stderr is allowed (one-line comment per phpt
+explaining the divergence); fixing the underlying refcount
+bug is preferred where scoped.
+
 ## Open Items / Caveats
 
 - ~~**LAPACK symbol portability on macOS.**~~ **Fixed in Story 10.** `config.m4` now probes both `dgetri_` (Linux convention) and `dgetri` (macOS Accelerate). `lapack_names.h` aliases symbols when the no-underscore variant is in use. macOS CI lane is now blocking.
